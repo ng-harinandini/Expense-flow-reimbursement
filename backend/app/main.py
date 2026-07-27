@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api import claims, policy_rules, audit_logs, ai, aws, health
+from app.api import claims, policy_rules, audit_logs, ai, aws, health, receipts
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -25,6 +25,7 @@ app.include_router(audit_logs.router, prefix=settings.API_PREFIX)
 app.include_router(ai.router, prefix=settings.API_PREFIX)
 app.include_router(aws.router, prefix=settings.API_PREFIX)
 app.include_router(health.router, prefix=settings.API_PREFIX)
+app.include_router(receipts.router, prefix=settings.API_PREFIX)
 
 @app.get("/")
 def root():

@@ -167,3 +167,59 @@ class RefineIamRequestSchema(BaseModel):
     currentPolicyJson: Optional[str] = None
     environmentName: Optional[str] = "AWS Serverless Sandbox"
     useCaseDescription: Optional[str] = "AWS Step Functions + Lambda + Textract"
+
+
+# --- Receipts domain (S3 + Textract + PostgreSQL) ---
+
+class ReceiptFieldSchema(BaseModel):
+    fieldType: Optional[str] = None
+    fieldLabel: Optional[str] = None
+    fieldValue: Optional[str] = None
+    confidence: Optional[float] = None
+
+
+class ReceiptLineItemDetailSchema(BaseModel):
+    lineNumber: Optional[int] = None
+    description: Optional[str] = None
+    quantity: Optional[float] = None
+    unitPrice: Optional[float] = None
+    amount: Optional[float] = None
+    raw: Optional[dict] = None
+
+
+class ReceiptS3LocationSchema(BaseModel):
+    bucket: Optional[str] = None
+    key: Optional[str] = None
+    region: Optional[str] = None
+
+
+class ReceiptSummarySchema(BaseModel):
+    """Summary-level view returned by the list endpoint."""
+    id: str
+    fileName: str
+    contentType: Optional[str] = None
+    fileSizeBytes: Optional[int] = None
+    employeeId: Optional[str] = None
+    extractionStatus: str
+    extractionSource: Optional[str] = None
+    vendorName: Optional[str] = None
+    transactionDate: Optional[str] = None
+    totalAmount: Optional[float] = None
+    currency: Optional[str] = None
+    s3: Optional[ReceiptS3LocationSchema] = None
+    createdAt: Optional[str] = None
+    updatedAt: Optional[str] = None
+
+
+class ReceiptDetailSchema(ReceiptSummarySchema):
+    """Full record including raw Textract JSON, fields and line items."""
+    rawTextract: Optional[dict] = None
+    normalizedExtraction: Optional[dict] = None
+    errorMessage: Optional[str] = None
+    fields: List[ReceiptFieldSchema] = []
+    lineItems: List[ReceiptLineItemDetailSchema] = []
+
+
+class ReceiptUploadResponseSchema(ReceiptDetailSchema):
+    """201 response for POST /receipts/upload (same shape as detail)."""
+    pass
