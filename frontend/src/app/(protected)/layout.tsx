@@ -1,6 +1,6 @@
 // import { Navbar } from "@/components/Navbar";
-import { SubHeader } from "@/components/SubHeader";
-import { TopHeader } from "@/components/TopHeader";
+import { SubHeader } from "@/components/shared/SubHeader";
+import { TopHeader } from "@/components/shared/TopHeader";
 
 export default function ProtectedLayout({
   children,
