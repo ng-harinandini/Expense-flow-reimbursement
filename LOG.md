@@ -1,0 +1,27 @@
+# LOG
+
+> Append-only, chronological. Newest entries at the bottom. One line or short block per event.
+> Record: baselines, verification runs, branch creation, task status flips, bugs, handoffs.
+
+Format: `YYYY-MM-DD HH:MM | <hook/skill> | <event> | <result>`
+
+---
+
+2026-07-24 | bootstrap | Created workflow framework (CLAUDE.md, HANDOFF.md, LOG.md, TASKS/task.md, PLANS/, DECISIONS/, 6 hooks, 11 skills) | done
+2026-07-24 | task-breakdown | Created Primary Task T001 (Receipt Upload & Amazon Textract Extraction API) + Macro/Atomic breakdown; registered in task.md | done
+2026-07-24 | hook-1-baseline | Baseline for T001: `python -c "from app.main import app"` exits 0, app imports/boots with routers registered, no errors. boto3 NOT installed in venv (expected new dep); python-multipart already present. No test suite exists → Done Checks are boot + endpoint observation. No pre-existing failures to carry forward. | pass
+2026-07-24 | hook-2-planning | Wrote PLANS/plan-T001.md (status awaiting-approval). Paused at human approval gate before Branch/Build. | awaiting-approval
+2026-07-24 | hook-2-planning | REVISED plan T001 per owner: scope expanded from in-memory to PostgreSQL persistence (SQLAlchemy 2.x, Alembic sole schema owner, pydantic-settings), S3 for original documents, Textract AnalyzeExpense. Added DB-safety constraints (no create_all/drop/truncate; STOP on schema conflict). Re-requesting approval. | awaiting-approval
+2026-07-24 | hook-2-planning | Reconciled PLANS/plan-T001.md: rewrote stale in-memory draft to match revised PostgreSQL/S3/Textract scope in task-T001 detail file. Plan + task detail now consistent. Still paused at human approval gate; no Build started. | awaiting-approval
+2026-07-24 | approval | OWNER APPROVED plan T001. Directive: build first (fallback mode, no AWS/DB creds needed to boot); owner will supply AWS credentials + DATABASE_URL later via env/credential chain. Proceeding to Hook 3 Branch → Hook 4 Build. | approved
+2026-07-24 | hook-3-branch | git init at expense root; created branch feature/T001-receipt-textract-postgres; added root .gitignore (venv/node_modules/.next/.env). No commits yet (commit only on owner request). | done
+2026-07-24 | hook-4-build | Started Build for T001. | in-progress
+2026-07-24 | hook-4-build | Built all atomic tasks M1-A1..M7-A3: requirements (sqlalchemy/alembic/psycopg/pydantic-settings/boto3), pydantic-settings config w/ DATABASE_URL||DB_* resolver, .env.example (placeholders), database.py (lazy engine, pool_pre_ping, no create_all), models (receipts/receipt_fields/receipt_line_items + extraction_status enum), alembic (ini/env/mako + initial migration 0001), s3_service + textract_service (graceful fallback), receipt schemas, receipts API (upload/list/get), health /ready + router registration. | done
+2026-07-24 | hook-5-verify | Installed deps into venv. Boot: `from app.main import app` exits 0 (no schema touch). OpenAPI lists POST /api/receipts/upload, GET /api/receipts, GET /api/receipts/{id}, GET /api/health, GET /api/ready. Models map; Base.metadata has 3 tables; no create_all in app code. S3+Textract fallback return correct shape. TestClient: /health 200 ok; /ready 503 not_ready (DB unconfigured — correct). alembic history shows 0001_initial_receipts (head). Offline `alembic upgrade head --sql` emits CREATE TYPE enum + 3 tables + indexes + FK ON DELETE CASCADE. | pass (non-DB checks)
+2026-07-24 | hook-5-verify | DEFERRED (need live DATABASE_URL + optional AWS creds from owner): `alembic upgrade head`/`current`/`downgrade -1` against real DB; POST /upload → 201 persisted row; GET list+by-id from DB; /ready healthy. Owner will supply creds later per approval directive. | deferred
+2026-07-24 | decision-logging | Wrote DECISIONS/ADR-001-receipts-persistence-architecture.md. | done
+2026-07-27 | analysis | Audited all API routes vs. roles. Finding: RBAC documented in README/frontend matrix but NOT enforced server-side — 15 endpoints all unauthenticated; actorRole read from body, never validated. | noted
+2026-07-27 | task-breakdown | Created Primary Task T002 (JWT Authentication & RBAC Enforcement) + M1..M5 breakdown; registered in task.md. Owner decisions: real JWT/session auth; enforce employee ownership of claims & receipts. | done
+2026-07-27 | hook-1-baseline | Baseline for T002: `from app.main import app` boots OK; migration head 0001_initial_receipts. Confirmed zero auth/authorization on all routers (code read). No test suite for auth yet. No pre-existing auth failures to carry. | pass
+2026-07-27 | hook-2-planning | Wrote PLANS/plan-T002.md (status awaiting-approval). One open decision at approval gate: user/credential store location (recommended in-memory seeded vs. Postgres users table). Paused at human approval gate before Branch/Build. | awaiting-approval
+2026-07-27 | hook-2-planning | REVISED T002 per owner: auth now via AWS Cognito (User Pool owns identity/tokens; backend verifies Cognito JWT). Roles = Cognito Groups (cognito:groups); employee link = custom:employeeId; login proxy via boto3 initiate_auth. Dropped local user table/passlib/Alembic users migration (no DB coupling). Reconciled task-T002 detail file to match. New open questions: provisioning (boto3 script vs IaC), token acquisition (login proxy vs Hosted UI), live-vs-deferred verification. Still paused at approval gate. | awaiting-approval
