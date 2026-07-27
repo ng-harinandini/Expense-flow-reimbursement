@@ -244,6 +244,31 @@
   );
 }
 
+@keyframes scan-sweep {
+  0% {
+    top: -10%;
+  }
+  100% {
+    top: 110%;
+  }
+}
+
+.scan-sweep-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0.5rem;
+  margin-top: -0.25rem;
+  animation: scan-sweep 1.8s linear infinite;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in oklab, var(--primary) 85%, transparent),
+    transparent
+  );
+  z-index: 10;
+}
+
 /* Progress bar animations */
 @keyframes progress-shine {
   0% {
