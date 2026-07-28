@@ -7,6 +7,8 @@ export const INITIAL_EMPLOYEES: Employee[] = [
     email: 'sarah.chen@acme.com',
     grade: 'L2',
     department: 'Engineering',
+    role: 'employee',
+    status: 'active',
     managerId: 'emp-201',
     managerName: 'David Miller',
     monthlySpendUSD: 240
@@ -17,6 +19,8 @@ export const INITIAL_EMPLOYEES: Employee[] = [
     email: 'marcus.brody@acme.com',
     grade: 'L4',
     department: 'Product Development',
+    role: 'employee',
+    status: 'active',
     managerId: 'emp-201',
     managerName: 'David Miller',
     monthlySpendUSD: 890
@@ -27,6 +31,8 @@ export const INITIAL_EMPLOYEES: Employee[] = [
     email: 'david.miller@acme.com',
     grade: 'L5', // Manager+
     department: 'Engineering Lead',
+    role: 'manager',
+    status: 'active',
     managerId: 'emp-301',
     managerName: 'Alex Vance',
     monthlySpendUSD: 1450
@@ -37,6 +43,8 @@ export const INITIAL_EMPLOYEES: Employee[] = [
     email: 'alex.vance@acme.com',
     grade: 'Director',
     department: 'Finance',
+    role: 'finance',
+    status: 'active',
     monthlySpendUSD: 3100
   }
 ];
