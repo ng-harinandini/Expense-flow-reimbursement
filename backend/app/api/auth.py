@@ -153,6 +153,12 @@ def respond_challenge(payload: RespondChallengeRequestSchema):
     secret_hash = _secret_hash(payload.email)
     if secret_hash:
         responses["SECRET_HASH"] = secret_hash
+    # Supply any attributes the pool marks required but the user doesn't have yet — Cognito
+    # demands them here (as userAttributes.<name>) before it will complete NEW_PASSWORD_REQUIRED.
+    if payload.name:
+        responses["userAttributes.name"] = payload.name
+    for attr_name, attr_value in (payload.userAttributes or {}).items():
+        responses[f"userAttributes.{attr_name}"] = attr_value
 
     try:
         resp = _cognito_client().respond_to_auth_challenge(
@@ -162,14 +168,17 @@ def respond_challenge(payload: RespondChallengeRequestSchema):
             ChallengeResponses=responses,
         )
     except ClientError as e:
-        code = e.response.get("Error", {}).get("Code", "UnknownError")
+        error = e.response.get("Error", {})
+        code = error.get("Code", "UnknownError")
+        message = error.get("Message") or code  # surface Cognito's real reason
         if code == "InvalidPasswordException":
-            raise HTTPException(status_code=400, detail="New password does not meet the pool policy.")
+            raise HTTPException(status_code=400, detail=f"New password rejected: {message}")
         if code in ("NotAuthorizedException", "ExpiredCodeException"):
             raise HTTPException(status_code=401, detail="Challenge session is invalid or expired; log in again.")
         if code in ("InvalidParameterException", "CodeMismatchException"):
-            raise HTTPException(status_code=400, detail=f"Invalid challenge response: {code}")
-        raise HTTPException(status_code=502, detail=f"Cognito error: {code}")
+            # e.g. "Required attributes missing: name" — pass name/userAttributes to fix.
+            raise HTTPException(status_code=400, detail=message)
+        raise HTTPException(status_code=502, detail=f"Cognito error: {code}: {message}")
     except (NoCredentialsError, BotoCoreError) as e:
         raise HTTPException(status_code=502, detail=f"Cognito unreachable: {e}")
 

@@ -1,4 +1,4 @@
-from typing import List, Optional, Any, Union
+from typing import List, Optional, Any, Union, Dict
 from pydantic import BaseModel, Field
 from datetime import datetime
 
@@ -145,6 +145,8 @@ class RespondChallengeRequestSchema(BaseModel):
     session: str                                # the Session returned by /auth/login
     newPassword: str                            # for NEW_PASSWORD_REQUIRED
     challenge: Optional[str] = "NEW_PASSWORD_REQUIRED"
+    name: Optional[str] = None                  # satisfies a required 'name' attribute on first login
+    userAttributes: Optional[Dict[str, str]] = None  # any other required attributes to set now
 
 
 class AuthenticatedUserSchema(BaseModel):

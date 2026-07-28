@@ -46,8 +46,8 @@ def make_id_token(claims: dict) -> str:
     return f"{_b64url({'alg': 'none'})}.{_b64url(claims)}.signature"
 
 
-def client_error(code: str) -> ClientError:
-    return ClientError({"Error": {"Code": code, "Message": code}}, "InitiateAuth")
+def client_error(code: str, message: str = None) -> ClientError:
+    return ClientError({"Error": {"Code": code, "Message": message or code}}, "InitiateAuth")
 
 
 class FakeCognito:
@@ -190,11 +190,31 @@ def test_respond_challenge_success_returns_tokens(use_fake):
     assert fake.last_challenge_responses["USERNAME"] == "a@corp.com"
 
 
+def test_respond_challenge_passes_required_name(use_fake):
+    id_token = make_id_token({"sub": "s1", "email": "a@corp.com", "custom:role_id": "admin"})
+    fake = use_fake(respond={"AuthenticationResult": {"IdToken": id_token, "AccessToken": "a"}})
+    r = client.post("/api/auth/respond-challenge",
+                    json={"email": "a@corp.com", "session": "s", "newPassword": "N3w!pass",
+                          "name": "Harinandini", "userAttributes": {"phone_number": "+100"}})
+    assert r.status_code == 200
+    assert fake.last_challenge_responses["userAttributes.name"] == "Harinandini"
+    assert fake.last_challenge_responses["userAttributes.phone_number"] == "+100"
+
+
 def test_respond_challenge_invalid_password_400(use_fake):
-    use_fake(respond=client_error("InvalidPasswordException"))
+    use_fake(respond=client_error("InvalidPasswordException", "Password below minimum length"))
     r = client.post("/api/auth/respond-challenge",
                     json={"email": "a@corp.com", "session": "s", "newPassword": "weak"})
     assert r.status_code == 400
+
+
+def test_respond_challenge_surfaces_real_cognito_message(use_fake):
+    use_fake(respond=client_error("InvalidParameterException",
+                                  "Required attribute is missing: name"))
+    r = client.post("/api/auth/respond-challenge",
+                    json={"email": "a@corp.com", "session": "s", "newPassword": "N3w!pass"})
+    assert r.status_code == 400
+    assert "name" in r.json()["detail"]  # real reason, not a generic string
 
 
 def test_respond_challenge_expired_session_401(use_fake):

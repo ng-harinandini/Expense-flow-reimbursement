@@ -101,33 +101,39 @@ def ensure_app_client(client, pool_id: str, client_id: str) -> None:
     log("app client updated: " + "; ".join(changed))
 
 
-def ensure_bootstrap_admin(client, pool_id: str, email: str) -> None:
+def ensure_bootstrap_admin(client, pool_id: str, email: str, name: str) -> None:
     email = email.strip().lower()
     try:
         user = client.admin_get_user(UserPoolId=pool_id, Username=email)
     except client.exceptions.UserNotFoundException:
+        # Include `name`: the pool requires it, and it must exist before the first-login
+        # NEW_PASSWORD_REQUIRED can complete.
         client.admin_create_user(
             UserPoolId=pool_id,
             Username=email,
             UserAttributes=[
                 {"Name": "email", "Value": email},
                 {"Name": "email_verified", "Value": "true"},
+                {"Name": "name", "Value": name},
                 {"Name": "custom:role_id", "Value": "admin"},
             ],
             DesiredDeliveryMediums=["EMAIL"],
         )
-        log(f"created bootstrap admin {email} (custom:role_id=admin, FORCE_CHANGE_PASSWORD)")
+        log(f"created bootstrap admin {email} (name={name}, custom:role_id=admin, FORCE_CHANGE_PASSWORD)")
         return
 
+    # Existing user: converge role and name without recreating or touching the password.
     attrs = {a["Name"]: a.get("Value") for a in user.get("UserAttributes", [])}
-    if attrs.get("custom:role_id") == "admin":
-        log(f"bootstrap admin {email} already has custom:role_id=admin — no change")
+    updates = []
+    if attrs.get("custom:role_id") != "admin":
+        updates.append({"Name": "custom:role_id", "Value": "admin"})
+    if not attrs.get("name"):
+        updates.append({"Name": "name", "Value": name})
+    if not updates:
+        log(f"bootstrap admin {email} already has custom:role_id=admin and name — no change")
         return
-    client.admin_update_user_attributes(
-        UserPoolId=pool_id, Username=email,
-        UserAttributes=[{"Name": "custom:role_id", "Value": "admin"}],
-    )
-    log(f"set custom:role_id=admin on existing user {email} (password untouched)")
+    client.admin_update_user_attributes(UserPoolId=pool_id, Username=email, UserAttributes=updates)
+    log(f"updated existing user {email}: {', '.join(u['Name'] for u in updates)} (password untouched)")
 
 
 def main() -> int:
@@ -144,7 +150,9 @@ def main() -> int:
 
     admin_email = os.environ.get("BOOTSTRAP_ADMIN_EMAIL")
     if admin_email:
-        ensure_bootstrap_admin(client, pool_id, admin_email)
+        # BOOTSTRAP_ADMIN_NAME is optional; default to the email local-part.
+        admin_name = os.environ.get("BOOTSTRAP_ADMIN_NAME") or admin_email.split("@", 1)[0]
+        ensure_bootstrap_admin(client, pool_id, admin_email, admin_name)
     else:
         log("BOOTSTRAP_ADMIN_EMAIL not set — skipping bootstrap admin step")
 
