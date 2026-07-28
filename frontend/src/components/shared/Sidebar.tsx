@@ -9,6 +9,7 @@ import {
   FileText,
   ShieldCheck,
   ClipboardCheck,
+  BadgeCheck,
   Wallet,
   ScrollText,
   type LucideIcon,
@@ -44,14 +45,20 @@ const NAV_ITEMS: NavItem[] = [
     label: "Approvals",
     icon: ClipboardCheck,
     href: "/approvals",
-    roles: ["manager", "finance"],
+    roles: ["manager"],
   },
   {
-    label: "Disbursement",
-    icon: Wallet,
-    href: "/disbursement",
+    label: "Finance Approvals",
+    icon: BadgeCheck,
+    href: "/finance-approvals",
     roles: ["finance"],
   },
+  // {
+  //   label: "Disbursement",
+  //   icon: Wallet,
+  //   href: "/disbursement",
+  //   roles: ["finance"],
+  // },
   {
     label: "Policy guidelines",
     icon: ShieldCheck,
@@ -79,10 +86,25 @@ const REVEAL_ON_EXPAND =
 
 export function Sidebar({ className }: { className?: string }) {
   const pathname = usePathname();
+  const asideRef = React.useRef<HTMLElement>(null);
   const visibleNavItems = NAV_ITEMS.filter((item) => item.roles.includes(role));
+
+  // Clicking (or Enter-ing) a nav link leaves it focused even though this is
+  // a client-side route change, not a real page load. Since the sidebar's
+  // expand/collapse relies on `focus-within`, that stray focus would pin it
+  // open until something else stole focus — regardless of the mouse. Once
+  // the route has actually changed, drop focus so width goes back to
+  // tracking real hover/keyboard-tab state only.
+  React.useEffect(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && asideRef.current?.contains(active)) {
+      active.blur();
+    }
+  }, [pathname]);
 
   return (
     <aside
+      ref={asideRef}
       className={cn(
         // Collapsed to an icon rail by default; widens on hover (or when a link
         // inside takes focus, so keyboard users get the labels too). Touch
@@ -106,7 +128,7 @@ export function Sidebar({ className }: { className?: string }) {
                     "relative flex items-center gap-3.5 rounded-lg px-2.5 py-3.5 text-sm whitespace-nowrap transition-colors",
                     isActive
                       ? "bg-primary/10 font-semibold text-primary"
-                      : "font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                      : "font-medium text-black hover:bg-accent hover:text-foreground"
                   )}
                 >
                   {isActive && (

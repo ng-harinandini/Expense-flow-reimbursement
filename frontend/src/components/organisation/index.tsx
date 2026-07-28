@@ -8,7 +8,7 @@ import {
   themeQuartz,
   type ColDef,
 } from "ag-grid-community";
-import { Search, UserPlus } from "lucide-react";
+import { Search, UserPlus, Users } from "lucide-react";
 
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/input";
@@ -31,6 +31,7 @@ import {
   USER_ROLES,
   managerOptions,
   nextEmployeeId,
+  orgSubheader,
 } from "./helpers";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -172,11 +173,14 @@ function Organisation() {
   return (
     <div className="rounded-xl border bg-card shadow-sm">
       <div className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-xl font-semibold text-foreground">Organisation Directory</h2>
-          <p className="text-sm text-muted-foreground">
-            Manage employees, grades, reporting lines, and platform roles
-          </p>
+        <div className="flex items-center gap-4">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
+            <Users className="size-6 text-primary" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold text-foreground">Organisation Directory</h2>
+            <p className="text-sm text-muted-foreground">{orgSubheader(role)}</p>
+          </div>
         </div>
         <Button className="w-full sm:w-auto" onClick={handleAdd}>
           <UserPlus />

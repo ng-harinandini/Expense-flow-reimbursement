@@ -204,6 +204,18 @@ export interface PolicyRuleDefinition {
   specialRules: string[];
 }
 
+/** A single admin-managed policy rule row, shown on the Policy Guidelines page. */
+export interface AdminPolicyRule {
+  id: number;
+  category: ExpenseCategory;
+  gradeApplicable: string; // e.g. 'All', 'L1-L3', 'L4+', 'Manager+'
+  maxAmount: number;
+  maxAmountUnit: string; // e.g. 'day', 'trip', 'night', 'event'
+  autoApproveLimit: number | null; // null means 'always manual review'
+  requiresReceiptAbove: number;
+  effectiveFrom: string; // ISO date
+}
+
 export interface AuditLogEntry {
   id: string;
   timestamp: string;

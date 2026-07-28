@@ -28,6 +28,22 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   auditor: "Auditor",
 };
 
+export const DEFAULT_ORG_SUBHEADER =
+  "Manage employees, grades, reporting lines, and platform roles";
+
+export const ROLE_SUBHEADERS: Record<UserRole, string> = {
+  employee: "Manage employee records, grades, and reporting lines",
+  manager: "Manage managers and their direct reports",
+  finance: "Manage finance team members and their platform access",
+  admin: "Manage admin users and their platform permissions",
+  auditor: "Manage auditors and compliance oversight access",
+};
+
+/** Subheader copy for the org directory, tailored to the active role filter. */
+export function orgSubheader(role: string) {
+  return (ROLE_SUBHEADERS as Record<string, string>)[role] ?? DEFAULT_ORG_SUBHEADER;
+}
+
 export const STATUS_LABELS: Record<EmployeeStatus, string> = {
   active: "Active",
   inactive: "Inactive",

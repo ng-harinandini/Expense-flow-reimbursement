@@ -7,7 +7,6 @@ import type { Employee, EmployeeStatus, UserRole } from "@/types";
 
 import {
   formatEmployeeId,
-  formatUsd,
   ROLE_LABELS,
   STATUS_LABELS,
 } from "./helpers";
@@ -102,14 +101,6 @@ export function buildColumnDefs(
       minWidth: 120,
       cellRenderer: (params: ICellRendererParams<Employee>) =>
         params.data ? <StatusBadge status={params.data.status} /> : null,
-    },
-    {
-      headerName: "Monthly Spend",
-      field: "monthlySpendUSD",
-      flex: 1,
-      minWidth: 130,
-      valueFormatter: (params) =>
-        params.value === undefined ? "" : formatUsd(params.value as number),
     },
     {
       headerName: "Actions",

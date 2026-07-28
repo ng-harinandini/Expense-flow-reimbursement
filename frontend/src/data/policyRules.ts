@@ -1,0 +1,55 @@
+import type { AdminPolicyRule } from "@/types";
+
+// TODO: replace with GET /api/policy-rules once the endpoint exists.
+export const INITIAL_POLICY_RULES: AdminPolicyRule[] = [
+  {
+    id: 1,
+    category: "Meals",
+    gradeApplicable: "All",
+    maxAmount: 40,
+    maxAmountUnit: "day",
+    autoApproveLimit: 25,
+    requiresReceiptAbove: 25,
+    effectiveFrom: "2026-01-01",
+  },
+  {
+    id: 2,
+    category: "Ground Transport",
+    gradeApplicable: "All",
+    maxAmount: 150,
+    maxAmountUnit: "trip",
+    autoApproveLimit: 50,
+    requiresReceiptAbove: 0,
+    effectiveFrom: "2026-01-01",
+  },
+  {
+    id: 3,
+    category: "Lodging",
+    gradeApplicable: "L1-L3",
+    maxAmount: 120,
+    maxAmountUnit: "night",
+    autoApproveLimit: null,
+    requiresReceiptAbove: 0,
+    effectiveFrom: "2026-01-01",
+  },
+  {
+    id: 4,
+    category: "Lodging",
+    gradeApplicable: "L4+",
+    maxAmount: 250,
+    maxAmountUnit: "night",
+    autoApproveLimit: null,
+    requiresReceiptAbove: 0,
+    effectiveFrom: "2026-01-01",
+  },
+  {
+    id: 5,
+    category: "Client Entertainment",
+    gradeApplicable: "Manager+",
+    maxAmount: 500,
+    maxAmountUnit: "event",
+    autoApproveLimit: null,
+    requiresReceiptAbove: 50,
+    effectiveFrom: "2026-01-01",
+  },
+];
