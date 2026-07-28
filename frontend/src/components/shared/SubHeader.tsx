@@ -21,7 +21,7 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: "Submit expense", icon: PlusCircle, href: "/workspace" },
+  { label: "Submit expense", icon: PlusCircle, href: "/submit-expense" },
   { label: "My expense claims", icon: FileText, href: "/claims" },
   { label: "Policy guidelines", icon: ShieldCheck, href: "/policy" },
   { label: "Approvals", icon: ClipboardCheck, href: "/approvals" },
