@@ -9,7 +9,7 @@ import {
   themeQuartz,
   type ColDef,
 } from "ag-grid-community";
-import { PlusCircle, Search } from "lucide-react";
+import { FileText, PlusCircle, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/input";
@@ -20,24 +20,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { INITIAL_CLAIMS } from "@/data/initialClaims";
-import type { ClaimStatus, ExpenseCategory, ExpenseClaim } from "@/types";
+import { INITIAL_MULTI_ITEM_CLAIMS } from "@/data/claims";
+import type { Claim, ClaimStatus } from "@/types";
 
 import { buildColumnDefs, STATUS_LABELS } from "./columns";
 import { ClaimDetailDialog } from "./ClaimDetailDialog";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
-const CATEGORY_OPTIONS: ExpenseCategory[] = [
-  "Meals",
-  "Ground Transport",
-  "Flights",
-  "Lodging",
-  "Client Entertainment",
-  "Software & Subscriptions",
-];
-
 const STATUS_OPTIONS: ClaimStatus[] = [
+  "Submitted",
   "Auto_Approved",
   "Manager_Review",
   "Finance_Review",
@@ -46,23 +38,21 @@ const STATUS_OPTIONS: ClaimStatus[] = [
   "Disbursed",
 ];
 
-const ALL_CATEGORIES = "all-categories";
 const ALL_STATUSES = "all-statuses";
 
 function MyClaims() {
   const router = useRouter();
   const [search, setSearch] = React.useState("");
-  const [category, setCategory] = React.useState<string>(ALL_CATEGORIES);
   const [status, setStatus] = React.useState<string>(ALL_STATUSES);
-  const [selectedClaim, setSelectedClaim] = React.useState<ExpenseClaim | null>(null);
+  const [selectedClaim, setSelectedClaim] = React.useState<Claim | null>(null);
   const [isDetailOpen, setIsDetailOpen] = React.useState(false);
 
-  const handleView = React.useCallback((claim: ExpenseClaim) => {
+  const handleView = React.useCallback((claim: Claim) => {
     setSelectedClaim(claim);
     setIsDetailOpen(true);
   }, []);
 
-  const columnDefs = React.useMemo<ColDef<ExpenseClaim>[]>(
+  const columnDefs = React.useMemo<ColDef<Claim>[]>(
     () => buildColumnDefs(handleView),
     [handleView]
   );
@@ -70,19 +60,18 @@ function MyClaims() {
   const rowData = React.useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return INITIAL_CLAIMS.filter((claim) => {
+    return INITIAL_MULTI_ITEM_CLAIMS.filter((claim) => {
       const matchesSearch =
         !query ||
         claim.claimNumber.toLowerCase().includes(query) ||
-        claim.merchantVendor.toLowerCase().includes(query) ||
+        claim.claimTitle.toLowerCase().includes(query) ||
         claim.employeeName.toLowerCase().includes(query);
 
-      const matchesCategory = category === ALL_CATEGORIES || claim.category === category;
       const matchesStatus = status === ALL_STATUSES || claim.status === status;
 
-      return matchesSearch && matchesCategory && matchesStatus;
+      return matchesSearch && matchesStatus;
     });
-  }, [search, category, status]);
+  }, [search, status]);
 
   const defaultColDef = React.useMemo<ColDef>(
     () => ({
@@ -96,11 +85,16 @@ function MyClaims() {
   return (
     <div className="rounded-xl border bg-card shadow-sm">
       <div className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-xl font-semibold text-foreground">Expense Claims Console</h2>
-          <p className="text-sm text-muted-foreground">
-            Review claims, AI policy violations, and fraud risk scores
-          </p>
+        <div className="flex items-center gap-4">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
+            <FileText className="size-6 text-primary" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold text-foreground">My Expense Claims</h2>
+            <p className="text-sm text-muted-foreground">
+              Review claims, AI policy violations, and fraud risk scores
+            </p>
+          </div>
         </div>
         <Button
           className="w-full sm:w-auto"
@@ -111,30 +105,18 @@ function MyClaims() {
         </Button>
       </div>
 
-      <div className="flex flex-col gap-3 px-6 pb-4 sm:flex-row sm:items-center">
-        <div className="relative flex-1">
+      <div className="flex items-center gap-3 px-6 pb-4">
+        <div className="relative w-1/2">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by claim #, vendor, employee..."
+            placeholder="Search by claim #, title, employee..."
             className="pl-9 text-foreground"
           />
         </div>
 
-        <Select value={category} onValueChange={setCategory}>
-          <SelectTrigger className="h-9 text-foreground sm:w-48">
-            <SelectValue placeholder="All Categories" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL_CATEGORIES}>All Categories</SelectItem>
-            {CATEGORY_OPTIONS.map((option) => (
-              <SelectItem key={option} value={option}>
-                {option}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex-1" />
 
         <Select value={status} onValueChange={setStatus}>
           <SelectTrigger className="h-9 text-foreground sm:w-48">
@@ -152,7 +134,7 @@ function MyClaims() {
       </div>
 
       <div className="h-[560px] px-6 pb-6">
-        <AgGridReact<ExpenseClaim>
+        <AgGridReact<Claim>
           theme={themeQuartz}
           rowData={rowData}
           columnDefs={columnDefs}

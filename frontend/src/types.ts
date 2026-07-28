@@ -6,12 +6,15 @@ export type UserRole = 'employee' | 'manager' | 'finance' | 'admin' | 'auditor';
 
 export type EmployeeGrade = 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'Director' | 'VP';
 
+export type EmployeeStatus = 'active' | 'inactive';
+
 export interface Employee {
   id: string;
   name: string;
   email: string;
   grade: EmployeeGrade;
-  department: string;
+  role: UserRole;
+  status: EmployeeStatus;
   managerId?: string;
   managerName?: string;
   avatarUrl?: string;
@@ -164,6 +167,32 @@ export interface ExpenseClaim {
   status: ClaimStatus;
   workflowHistory: WorkflowStepLog[];
   comments: ClaimComment[];
+}
+
+/** One expense line item within a multi-item Claim (see submit-expense flow). */
+export interface ClaimExpenseItem {
+  id: string;
+  category: ExpenseCategory;
+  merchantVendor: string;
+  expenseDate: string;
+  description: string;
+  amount: number;
+  currency: string;
+  receiptUrl: string;
+}
+
+/** A claim raised for a trip/purchase, grouping one or more expense items. */
+export interface Claim {
+  id: string;
+  claimNumber: string;
+  employeeId: string;
+  employeeName: string;
+  claimTitle: string;
+  fromDate: string;
+  toDate: string;
+  status: ClaimStatus;
+  items: ClaimExpenseItem[];
+  workflowHistory: WorkflowStepLog[];
 }
 
 export interface PolicyRuleDefinition {

@@ -1,5 +1,4 @@
-// import { Navbar } from "@/components/Navbar";
-import { SubHeader } from "@/components/shared/SubHeader";
+import { Sidebar } from "@/components/shared/Sidebar";
 import { TopHeader } from "@/components/shared/TopHeader";
 
 export default function ProtectedLayout({
@@ -8,18 +7,15 @@ export default function ProtectedLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen bg-background">
-      <div className="sticky top-0 z-30 shadow-sm">
-        <TopHeader
-          userName="harinandinib"
-          userEmail="harinandinib@example.com"
-          userRole="Participant"
-        />
-        <SubHeader />
-      </div>
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        {/* <Navbar className="mb-6" /> */}
-        {children}
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <TopHeader
+        userName="harinandinib"
+        userEmail="harinandinib@example.com"
+        userRole="Participant"
+      />
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar />
+        <main className="flex-1 overflow-y-auto p-4">{children}</main>
       </div>
     </div>
   );

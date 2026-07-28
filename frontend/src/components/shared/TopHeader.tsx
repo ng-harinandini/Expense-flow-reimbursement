@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { LogOut, Wallet } from "lucide-react";
+import { ChevronDown, LogOut, ReceiptText } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -28,17 +28,18 @@ export function TopHeader({
   const initial = userName.charAt(0).toUpperCase();
 
   return (
-    <header className="border-b bg-background">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-gradient-to-r from-primary to-secondary">
-            <Wallet className="size-4.5 text-primary-foreground" />
+    <header className="shrink-0 border-b border-border bg-card">
+      <div className="flex w-full items-center justify-between gap-3 px-4 py-3 sm:px-6">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-orange-500">
+            <ReceiptText className="size-5 text-primary-foreground" />
           </div>
           <div className="min-w-0">
-            <span className="block truncate bg-gradient-to-r from-primary to-secondary bg-clip-text text-lg font-extrabold tracking-tight text-transparent sm:text-xl">
-              ExpenseFlow
+            <span className="block truncate text-xl font-extrabold tracking-tight">
+              <span className="text-primary">Expense</span>
+              <span className="text-secondary">Flow</span>
             </span>
-            <p className="hidden truncate text-[11px] font-medium uppercase tracking-wider text-muted-foreground sm:block">
+            <p className="hidden truncate text-xs font-medium text-muted-foreground sm:block">
               Expense Reimbursement Automation
             </p>
           </div>
@@ -46,13 +47,14 @@ export function TopHeader({
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="shrink-0 rounded-full transition-opacity hover:opacity-80">
+            <button className="flex shrink-0 items-center gap-1.5 rounded-full transition-opacity hover:opacity-80">
               <Avatar className="size-10">
                 {avatarUrl && <AvatarImage src={avatarUrl} alt={userName} />}
-                <AvatarFallback className="bg-primary text-base text-primary-foreground font-semibold">
+                <AvatarFallback className="bg-primary text-xl text-primary-foreground font-semibold">
                   {initial}
                 </AvatarFallback>
               </Avatar>
+              <ChevronDown className="size-4 text-muted-foreground" />
             </button>
           </DropdownMenuTrigger>
 

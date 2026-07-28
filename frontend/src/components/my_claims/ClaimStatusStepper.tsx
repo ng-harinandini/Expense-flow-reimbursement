@@ -6,7 +6,6 @@ import {
   BadgeCheck,
   Check,
   FileText,
-  ScanLine,
   UserCircle,
   Wallet,
   X,
@@ -14,11 +13,32 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import type { ClaimStatus, ExpenseClaim } from "@/types";
+import type { ClaimStatus, UserRole, WorkflowStepLog } from "@/types";
 
 import { formatDate } from "./columns";
 
-type StepKey = "submitted" | "aiScanned" | "managerReview" | "financeReview" | "disbursed";
+interface StepperClaim {
+  status: ClaimStatus;
+  workflowHistory: WorkflowStepLog[];
+}
+
+const ROLE_LABELS: Record<UserRole, string> = {
+  employee: "Employee",
+  manager: "Manager",
+  finance: "Finance",
+  admin: "Admin",
+  auditor: "Auditor",
+};
+
+const ROLE_BADGE_CLASSES: Record<UserRole, string> = {
+  employee: "bg-emerald-500/15 text-emerald-700",
+  manager: "bg-secondary/15 text-secondary",
+  finance: "bg-blue-500/15 text-blue-700",
+  admin: "bg-amber-500/15 text-amber-700",
+  auditor: "bg-muted text-muted-foreground",
+};
+
+type StepKey = "submitted" | "managerReview" | "financeReview" | "disbursed";
 
 interface StepDefinition {
   key: StepKey;
@@ -28,7 +48,6 @@ interface StepDefinition {
 
 const STEPS: StepDefinition[] = [
   { key: "submitted", label: "Submitted", icon: FileText },
-  { key: "aiScanned", label: "AI scanned", icon: ScanLine },
   { key: "managerReview", label: "Manager review", icon: UserCircle },
   { key: "financeReview", label: "Finance review", icon: Wallet },
   { key: "disbursed", label: "Disbursed", icon: BadgeCheck },
@@ -37,14 +56,16 @@ const STEPS: StepDefinition[] = [
 const TERMINAL_STEP_INDEX_BY_STATUS: Record<ClaimStatus, number> = {
   Draft: -1,
   Submitted: 0,
-  Processing_AI: 1,
-  Auto_Approved: 3,
-  Manager_Review: 2,
-  Finance_Review: 3,
-  Approved: 3,
-  Rejected: 3,
-  Disbursed: 4,
-  Flagged_Fraud: 2,
+  // AI scanning is invisible in the stepper now — the claim just stays on
+  // "Submitted" until manager review actually begins.
+  Processing_AI: 0,
+  Auto_Approved: 2,
+  Manager_Review: 1,
+  Finance_Review: 2,
+  Approved: 2,
+  Rejected: 2,
+  Disbursed: 3,
+  Flagged_Fraud: 1,
 };
 
 export function getCurrentStepIndex(status: ClaimStatus): number {
@@ -81,15 +102,31 @@ function getCurrentStepOverride(status: ClaimStatus): StepVisualOverride | null 
   }
 }
 
-function getStepTimestamp(claim: ExpenseClaim, key: StepKey): string | undefined {
-  const match = claim.workflowHistory.find((entry) => {
+function findWorkflowEntry(claim: StepperClaim, key: StepKey): WorkflowStepLog | undefined {
+  return claim.workflowHistory.find((entry) => {
     if (key === "submitted") return entry.stepName === "Submit Claim";
-    if (key === "aiScanned")
-      return entry.stepName === "AI OCR Extraction" || entry.stepName === "Policy Validation";
     if (key === "financeReview") return entry.stepName === "Finance Review";
     return false;
   });
-  return match?.timestamp;
+}
+
+interface StepActor {
+  name: string;
+  role: UserRole;
+}
+
+// Manager review has no dedicated workflowHistory entry in the seed data (only
+// Submit Claim / Finance Review are logged), so its actor comes from the
+// employee's assigned manager instead of the log.
+function getStepActor(
+  step: StepDefinition,
+  workflowEntry: WorkflowStepLog | undefined,
+  manager: string | undefined
+): StepActor | undefined {
+  if (step.key === "managerReview") {
+    return manager ? { name: manager, role: "manager" } : undefined;
+  }
+  return workflowEntry ? { name: workflowEntry.actorName, role: workflowEntry.actorRole } : undefined;
 }
 
 function StepRow({
@@ -97,19 +134,25 @@ function StepRow({
   index,
   currentIndex,
   claim,
+  manager,
   isLast,
 }: {
   step: StepDefinition;
   index: number;
   currentIndex: number;
-  claim: ExpenseClaim;
+  claim: StepperClaim;
+  manager: string | undefined;
   isLast: boolean;
 }) {
   const isDone = index < currentIndex;
   const isCurrent = index === currentIndex;
-  const timestamp = getStepTimestamp(claim, step.key);
+  const workflowEntry = findWorkflowEntry(claim, step.key);
+  const timestamp = workflowEntry?.timestamp;
   const override = isCurrent ? getCurrentStepOverride(claim.status) : null;
   const Icon = override?.icon ?? step.icon;
+  // Only reveal who acted on a step once it's been reached — pending steps
+  // haven't necessarily been assigned to the person who'll end up handling them.
+  const actor = (isDone || isCurrent) ? getStepActor(step, workflowEntry, manager) : undefined;
 
   return (
     <div className="flex gap-3">
@@ -152,6 +195,19 @@ function StepRow({
               ? formatDate(timestamp)
               : "Pending"}
         </p>
+        {actor && (
+          <>
+            <p className="mt-1.5 text-xs text-muted-foreground">by {actor.name}</p>
+            <span
+              className={cn(
+                "mt-1 inline-block rounded-full px-2 py-0.5 text-[11px] font-medium",
+                ROLE_BADGE_CLASSES[actor.role]
+              )}
+            >
+              {ROLE_LABELS[actor.role]}
+            </span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -159,9 +215,11 @@ function StepRow({
 
 export function ClaimStatusStepper({
   claim,
+  manager,
   className,
 }: {
-  claim: ExpenseClaim;
+  claim: StepperClaim;
+  manager?: string;
   className?: string;
 }) {
   const currentIndex = getCurrentStepIndex(claim.status);
@@ -175,6 +233,7 @@ export function ClaimStatusStepper({
           index={index}
           currentIndex={currentIndex}
           claim={claim}
+          manager={manager}
           isLast={index === STEPS.length - 1}
         />
       ))}

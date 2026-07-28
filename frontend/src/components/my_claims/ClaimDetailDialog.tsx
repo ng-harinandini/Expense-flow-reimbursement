@@ -9,17 +9,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Button } from "@/components/ui/Button";
 import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
-import type { ExpenseClaim } from "@/types";
+import type { Claim } from "@/types";
 
-import { formatCurrency, formatDate } from "./columns";
+import { formatCurrency, formatDate, getClaimTotal } from "./columns";
 import { ClaimStatusStepper, getCurrentStepIndex } from "./ClaimStatusStepper";
 
-function getCurrentStepCopy(claim: ExpenseClaim): { title: string; body: string } {
-  const manager = INITIAL_EMPLOYEES.find((e) => e.id === claim.employeeId)?.managerName;
-
-  switch (claim.status) {
+function getCurrentStepCopy(status: Claim["status"], manager?: string): { title: string; body: string } {
+  switch (status) {
     case "Submitted":
       return {
         title: "Currently: Submitted",
@@ -72,31 +77,47 @@ function getCurrentStepCopy(claim: ExpenseClaim): { title: string; body: string 
 }
 
 interface ClaimDetailDialogProps {
-  claim: ExpenseClaim | null;
+  claim: Claim | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
 export function ClaimDetailDialog({ claim, open, onOpenChange }: ClaimDetailDialogProps) {
+  const [selectedItemId, setSelectedItemId] = React.useState<string>("");
+
+  // Default to the first expense item whenever a (new) claim is opened.
+  React.useEffect(() => {
+    if (open && claim && claim.items.length > 0) {
+      setSelectedItemId(claim.items[0].id);
+    }
+  }, [open, claim]);
+
   if (!claim) return null;
 
   const currentIndex = getCurrentStepIndex(claim.status);
-  const currentStepCopy = getCurrentStepCopy(claim);
   const manager = INITIAL_EMPLOYEES.find((e) => e.id === claim.employeeId)?.managerName;
+  const currentStepCopy = getCurrentStepCopy(claim.status, manager);
   const canWithdraw = currentIndex <= 1;
+  const totalAmount = getClaimTotal(claim);
+  const selectedItem =
+    claim.items.find((item) => item.id === selectedItemId) ?? claim.items[0];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader className="pr-8">
           <DialogTitle className="text-xl">{claim.employeeName}</DialogTitle>
           <p className="text-sm text-muted-foreground">
-            {claim.merchantVendor} · {claim.claimNumber} · {formatCurrency(claim.amount, claim.currency)}
+            {claim.claimTitle} · {claim.claimNumber} · {formatCurrency(totalAmount)}
           </p>
         </DialogHeader>
 
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-[auto_1fr]">
-          <ClaimStatusStepper claim={claim} className="sm:pr-6 sm:border-r" />
+          <ClaimStatusStepper
+            claim={claim}
+            manager={manager}
+            className="sm:pr-6 sm:border-r"
+          />
 
           <div className="flex flex-col gap-4">
             <div className="rounded-lg border bg-secondary/10 p-4">
@@ -104,34 +125,72 @@ export function ClaimDetailDialog({ claim, open, onOpenChange }: ClaimDetailDial
               <p className="mt-1 text-sm text-muted-foreground">{currentStepCopy.body}</p>
             </div>
 
-            <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Category
-                </p>
-                <p className="text-sm font-medium text-foreground">{claim.category}</p>
-              </div>
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Date
-                </p>
-                <p className="text-sm font-medium text-foreground">{formatDate(claim.expenseDate)}</p>
-              </div>
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Manager
-                </p>
-                <p className="text-sm font-medium text-foreground">{manager ?? "—"}</p>
-              </div>
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Amount
-                </p>
-                <p className="text-sm font-semibold text-foreground">
-                  {formatCurrency(claim.amount, claim.currency)}
-                </p>
-              </div>
-            </div>
+            {selectedItem && (
+              <>
+                <div className="space-y-1.5">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Expense item
+                  </p>
+                  <Select value={selectedItem.id} onValueChange={setSelectedItemId}>
+                    <SelectTrigger className="h-9 text-foreground">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {claim.items.map((item, index) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          Expense Item {index + 1} — {item.merchantVendor}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Category
+                    </p>
+                    <p className="text-sm font-medium text-foreground">{selectedItem.category}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Date
+                    </p>
+                    <p className="text-sm font-medium text-foreground">
+                      {formatDate(selectedItem.expenseDate)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Vendor
+                    </p>
+                    <p className="text-sm font-medium text-foreground">
+                      {selectedItem.merchantVendor}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Amount
+                    </p>
+                    <p className="text-sm font-semibold text-foreground">
+                      {formatCurrency(selectedItem.amount, selectedItem.currency)}
+                    </p>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Description
+                    </p>
+                    <p className="text-sm text-foreground">{selectedItem.description}</p>
+                  </div>
+                </div>
+
+                <img
+                  src={selectedItem.receiptUrl}
+                  alt={`Receipt for ${selectedItem.merchantVendor}`}
+                  className="max-h-48 w-full rounded-lg border object-cover"
+                />
+              </>
+            )}
 
             <div className="mt-2 flex items-center border-t pt-4">
               <Button
