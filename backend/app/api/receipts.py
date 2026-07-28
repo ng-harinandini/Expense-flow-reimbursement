@@ -31,6 +31,7 @@ from app.schemas.schemas import (
 )
 from app.services.s3_service import upload_receipt_to_s3
 from app.services.textract_service import analyze_receipt_with_textract
+from app.core.deps import CurrentUser, get_current_user, require_roles
 
 router = APIRouter(prefix="/receipts", tags=["Receipts"])
 
@@ -131,7 +132,10 @@ async def upload_receipt(
     file: UploadFile = File(...),
     employeeId: Optional[str] = Form(None),
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(require_roles("employee")),
 ):
+    # Bind the receipt to the authenticated employee — ignore any client-supplied employeeId.
+    employeeId = current.employee_id
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
@@ -207,7 +211,11 @@ async def upload_receipt(
 def list_receipts(
     employeeId: Optional[str] = None,
     db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
 ):
+    # Employees see only their own receipts — ignore any employeeId they pass.
+    if current.role == "employee":
+        employeeId = current.employee_id
     stmt = select(Receipt).order_by(Receipt.created_at.desc())
     if employeeId:
         stmt = stmt.where(Receipt.employee_id == employeeId)
@@ -216,7 +224,11 @@ def list_receipts(
 
 
 @router.get("/{receipt_id}", response_model=ReceiptDetailSchema)
-def get_receipt(receipt_id: str, db: Session = Depends(get_db)):
+def get_receipt(
+    receipt_id: str,
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+):
     try:
         rid = uuid.UUID(receipt_id)
     except ValueError:
@@ -224,5 +236,8 @@ def get_receipt(receipt_id: str, db: Session = Depends(get_db)):
 
     receipt = db.get(Receipt, rid)
     if receipt is None:
+        raise HTTPException(status_code=404, detail="Receipt not found.")
+    # Employees may only read their own receipts; 404 avoids leaking existence.
+    if current.role == "employee" and receipt.employee_id != current.employee_id:
         raise HTTPException(status_code=404, detail="Receipt not found.")
     return _serialize_detail(receipt)

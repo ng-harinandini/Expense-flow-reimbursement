@@ -2,11 +2,12 @@ import time
 import random
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.services.store import claims_store, INITIAL_EMPLOYEES, add_audit_log
 from app.services.policy_engine import evaluate_expense_policy
 from app.services.fraud_engine import screen_for_anomalies
 from app.schemas.schemas import ExpenseClaimCreateSchema, ActionRequestSchema
+from app.core.deps import CurrentUser, get_current_user, require_roles
 
 router = APIRouter(prefix="/claims", tags=["Claims"])
 
@@ -15,8 +16,12 @@ def get_claims(
     category: Optional[str] = None,
     status: Optional[str] = None,
     employeeId: Optional[str] = None,
-    riskLevel: Optional[str] = None
+    riskLevel: Optional[str] = None,
+    current: CurrentUser = Depends(get_current_user),
 ):
+    # Employees may only see their own claims — ignore any employeeId they pass.
+    if current.role == "employee":
+        employeeId = current.employee_id
     filtered = list(claims_store)
     if category:
         filtered = [c for c in filtered if c.get("category") == category]
@@ -29,8 +34,13 @@ def get_claims(
     return filtered
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-def create_claim(payload: ExpenseClaimCreateSchema):
+def create_claim(
+    payload: ExpenseClaimCreateSchema,
+    current: CurrentUser = Depends(require_roles("employee")),
+):
     claim_data = payload.model_dump()
+    # An employee can only file claims for themselves — bind to the token identity.
+    claim_data["employeeId"] = current.employee_id
 
     new_id = f"claim-{int(time.time()*1000)}"
     claim_number = f"EXP-{datetime.now().year}-{random.randint(1000, 9999)}"
@@ -146,14 +156,23 @@ def create_claim(payload: ExpenseClaimCreateSchema):
     return new_claim
 
 @router.post("/{claim_id}/action")
-def execute_claim_action(claim_id: str, payload: ActionRequestSchema):
+def execute_claim_action(
+    claim_id: str,
+    payload: ActionRequestSchema,
+    current: CurrentUser = Depends(require_roles("manager", "finance", "admin")),
+):
     claim = next((c for c in claims_store if c.get("id") == claim_id or c.get("claimNumber") == claim_id), None)
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
 
     action = payload.action
-    actor_name = payload.actorName or "Manager"
-    actor_role = payload.actorRole or "manager"
+    # Only finance/admin may disburse funds; managers can approve/reject/flag.
+    if action == "DISBURSE" and current.role not in ("finance", "admin"):
+        raise HTTPException(status_code=403, detail="Only finance or admin can disburse.")
+
+    # Actor is the authenticated caller, not client-supplied strings.
+    actor_role = current.role
+    actor_name = current.email or payload.actorName or actor_role
     notes = payload.notes or ""
 
     if action == "APPROVE":

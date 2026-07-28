@@ -135,6 +135,73 @@ class ActionRequestSchema(BaseModel):
     actorRole: Optional[str] = "manager"
     notes: Optional[str] = ""
 
+class LoginRequestSchema(BaseModel):
+    email: str
+    password: str
+
+
+class RespondChallengeRequestSchema(BaseModel):
+    email: str
+    session: str                                # the Session returned by /auth/login
+    newPassword: str                            # for NEW_PASSWORD_REQUIRED
+    challenge: Optional[str] = "NEW_PASSWORD_REQUIRED"
+
+
+class AuthenticatedUserSchema(BaseModel):
+    """Identity decoded from the Cognito ID token returned by login.
+
+    Role comes exclusively from custom:role_id — Cognito Groups are not used for RBAC.
+    """
+    sub: Optional[str] = None           # canonical immutable identity
+    email: Optional[str] = None
+    role: Optional[str] = None          # from custom:role_id (one of the 5 app roles)
+    employeeId: Optional[str] = None    # from custom:employeeId (optional ownership link)
+
+
+class LoginResponseSchema(BaseModel):
+    # Present on success:
+    idToken: Optional[str] = None
+    accessToken: Optional[str] = None
+    refreshToken: Optional[str] = None
+    expiresIn: Optional[int] = None
+    tokenType: Optional[str] = "Bearer"
+    user: Optional[AuthenticatedUserSchema] = None
+    # Present when Cognito returns a challenge instead of tokens (e.g. NEW_PASSWORD_REQUIRED):
+    challenge: Optional[str] = None
+    session: Optional[str] = None
+
+
+class AdminCreateUserSchema(BaseModel):
+    email: str
+    role: str                              # custom:role_id — must be one of the 5 app roles
+    employeeId: Optional[str] = None       # custom:employeeId (optional ownership link)
+    name: Optional[str] = None
+
+
+class AdminUpdateUserSchema(BaseModel):
+    employeeId: Optional[str] = None
+    name: Optional[str] = None
+
+
+class AdminChangeRoleSchema(BaseModel):
+    role: str                              # new custom:role_id value (validated against the 5)
+
+
+class AdminUserSummarySchema(BaseModel):
+    username: Optional[str] = None         # Cognito username (immutable) — the sub-linked handle
+    sub: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None             # custom:role_id
+    employeeId: Optional[str] = None
+    enabled: Optional[bool] = None
+    status: Optional[str] = None
+
+
+class AdminUserListSchema(BaseModel):
+    users: List[AdminUserSummarySchema] = []
+    nextToken: Optional[str] = None
+
+
 class PolicyRuleDefinitionSchema(BaseModel):
     category: str
     maxAmountUSD: Union[float, str]

@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     S3_BUCKET_NAME: Optional[str] = None
     TEXTRACT_ENABLED: bool = False
 
+    # --- AWS Cognito (authentication) ---
+    # Region is derived from the pool id prefix (e.g. "ap-south-1_xxxxx") when not set explicitly.
+    COGNITO_REGION: Optional[str] = None
+    COGNITO_USER_POOL_ID: Optional[str] = None
+    COGNITO_APP_CLIENT_ID: Optional[str] = None
+    COGNITO_APP_CLIENT_SECRET: Optional[str] = None  # only if the app client has a secret
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def database_url(self) -> Optional[str]:
@@ -72,6 +79,20 @@ class Settings(BaseSettings):
     @property
     def database_configured(self) -> bool:
         return self.database_url is not None
+
+    @property
+    def cognito_region(self) -> str:
+        """Region for Cognito calls. Explicit COGNITO_REGION wins; otherwise derived from the
+        user-pool id prefix (`ap-south-1_xxxxx` → `ap-south-1`); falls back to AWS_REGION."""
+        if self.COGNITO_REGION:
+            return self.COGNITO_REGION
+        if self.COGNITO_USER_POOL_ID and "_" in self.COGNITO_USER_POOL_ID:
+            return self.COGNITO_USER_POOL_ID.split("_", 1)[0]
+        return self.AWS_REGION
+
+    @property
+    def cognito_configured(self) -> bool:
+        return bool(self.COGNITO_USER_POOL_ID and self.COGNITO_APP_CLIENT_ID)
 
 
 settings = Settings()

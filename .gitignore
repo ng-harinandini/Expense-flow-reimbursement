@@ -14,3 +14,7 @@ backend/.env
 # OS
 .DS_Store
 Thumbs.db
+# Recursive Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
