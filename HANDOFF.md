@@ -10,9 +10,52 @@
 - **Branch:** `feature/T001-receipt-textract-postgres` (T002 branch not yet created — Hook 3 runs on approval). No commits yet — commit only on owner request, summary-only messages per CLAUDE.md.
 - **Baseline:** deps installed in `backend/venv`; app boots clean; migration head `0001_initial_receipts`; zero auth on all routers today.
 
-## T002 — Next Action (owner-gated: approve plan)
+## T002 — M2/M3/M4/M5 built (RBAC via custom:role_id); M1 + M6 docs remain
 
-**Auth approach = AWS Cognito** (User Pool owns identity/tokens; backend verifies Cognito JWT; roles = Cognito Groups; employee link = `custom:employeeId`). No local user table / DB coupling. Read `PLANS/plan-T002.md` and answer the three open questions: (1) provisioning — boto3 script (recommended) vs IaC; (2) token acquisition — `/auth/login` proxy (recommended) vs Hosted UI/Amplify; (3) live pool now vs build-offline-and-defer the live login-proxy check. On answers I proceed Hook 3 (Branch `feature/T002-auth-rbac`) → Hook 4 (Build M1→M5). Note: enforcing auth will 401 the current frontend until it sends a Bearer token — frontend login wiring is a separate task.
+Branch `feature/T002-auth-rbac` (app repo). **RBAC source of truth = `custom:role_id`** (Cognito
+Groups not used). Built & unit-tested offline (41 passed, 1 skipped):
+- **M2** `app/api/auth.py` — `POST /auth/login` (boto3), `GET /auth/me`, admin-only `GET /auth/pool-status`.
+- **M2/M3** `app/core/security.py` (JWKS RS256 verify) + `app/core/deps.py` (`get_current_user`,
+  `require_roles`) — authorize exclusively from `custom:role_id`; 401 bad/missing token, 403 missing/invalid/unauthorized role.
+- **M4** enforcement + ownership wired onto all routers per the matrix (claims/receipts ownership,
+  DISBURSE finance/admin, admin-only ai-refine/aws/pool-status, etc.).
+- **M5** `app/api/admin_users.py` — admin-only create/list/get/patch/role/enable/disable via Cognito
+  Admin APIs; role change sets `custom:role_id`; audits with `sub`.
+
+**Cognito-side setup still required for live login** (pool `ap-south-1_uZwsnjASV`): enable
+`ALLOW_USER_PASSWORD_AUTH` on the app client; grant app client **read** on `custom:role_id` +
+`custom:employeeId`; set `harinandini@ngenux.com` permanent password + `custom:role_id=admin`.
+**Remaining T002:** M1 provisioning script; M6 README/frontend-matrix docs. Uncommitted.
+
+## T002 — Earlier: Build started (M2 login proxy live-verified)
+
+Branch `feature/T002-auth-rbac` (app repo, off `e45b404`). **Built + live-verified:** `POST
+/api/auth/login` (boto3 `initiate_auth` USER_PASSWORD_AUTH) and `GET /api/auth/pool-status`
+against owner pool `ap-south-1_uZwsnjASV` — pool reachable, USER_PASSWORD_AUTH enabled, but the
+pool has **0 users** so a successful token needs a user created first (console or
+`admin-create-user` + `admin-set-user-password --permanent`, or the future M5 admin API). New
+files: `app/api/auth.py`, `.env.example`; edited `config.py` (Cognito settings, region derived
+from pool-id), `schemas.py` (Login schemas), `main.py` (router). Uncommitted.
+**Remaining T002:** M1 provisioning, M3 token verify/JWKS, M4 RBAC enforcement, M5 admin
+user-management, M6 tests+docs.
+
+## T002 — Original plan gate (still relevant for the rest)
+
+**Auth = AWS Cognito, admin-driven onboarding** (plan revision approved). User Pool owns
+identity/tokens; backend verifies Cognito JWT; roles = Cognito Groups; employee link =
+`custom:employeeId`. Provisioning seeds only pool/client/groups + one bootstrap admin
+(`BOOTSTRAP_ADMIN_EMAIL`); all onboarding flows Admin → FastAPI → boto3 → Cognito via new
+admin-only router `app/api/admin_users.py`. Email = sign-in/admin-facing id; Cognito `sub` =
+canonical internal id. Macros: M1 provision → M2 auth core → M3 deps → M4 enforce+ownership →
+M5 admin user-mgmt → M6 verify+docs. See `PLANS/plan-T002.md`, `TASKS/task-T002-rbac-auth.md`,
+`DECISIONS/ADR-002-auth-rbac.md`.
+
+**Two open questions before build** (plan §7): (1) provisioning — boto3 script (recommended) vs
+CDK/Terraform; (2) token acquisition — `/auth/login` proxy (recommended) vs Hosted UI/Amplify.
+On answers I proceed Hook 3 (Branch `feature/T002-auth-rbac` off app-repo `e45b404`) → Hook 4
+(Build M1→M6). Note: README + frontend matrix doc edits are part of M6 (they describe live
+endpoints, deferred until built). Enforcing auth will 401 the current frontend until it sends a
+Bearer token — frontend login/user-management UI wiring is a separate task.
 
 ## What Exists
 
