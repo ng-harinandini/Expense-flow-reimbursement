@@ -15,7 +15,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-[#020617] text-slate-100 antialiased selection:bg-orange-500/30 selection:text-orange-200">
+      <body className="bg-background text-foreground antialiased selection:bg-orange-500/30 selection:text-orange-200">
         <QueryProvider>{children}</QueryProvider>
       </body>
     </html>

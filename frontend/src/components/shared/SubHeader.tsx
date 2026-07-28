@@ -8,33 +8,77 @@ import {
   FileText,
   ShieldCheck,
   ClipboardCheck,
-  BarChart2,
+  Wallet,
+  ScrollText,
   type LucideIcon,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import type { UserRole } from "@/types";
 
 interface NavItem {
   label: string;
   icon: LucideIcon;
   href: string;
+  roles: UserRole[];
 }
 
+// TODO: replace with real auth-derived role once auth is wired up
+const role: UserRole = "employee";
+
 const NAV_ITEMS: NavItem[] = [
-  { label: "Submit expense", icon: PlusCircle, href: "/submit-expense" },
-  { label: "My expense claims", icon: FileText, href: "/my-claims" },
-  { label: "Policy guidelines", icon: ShieldCheck, href: "/policy" },
-  { label: "Approvals", icon: ClipboardCheck, href: "/approvals" },
-  { label: "Reports", icon: BarChart2, href: "/reports" },
+  {
+    label: "Submit expense",
+    icon: PlusCircle,
+    href: "/submit-expense",
+    roles: ["employee", "manager"],
+  },
+  {
+    label: "My expense claims",
+    icon: FileText,
+    href: "/my-claims",
+    roles: ["employee", "manager"],
+  },
+  {
+    label: "Approvals",
+    icon: ClipboardCheck,
+    href: "/approvals",
+    roles: ["manager", "finance"],
+  },
+  {
+    label: "Disbursement",
+    icon: Wallet,
+    href: "/disbursement",
+    roles: ["finance"],
+  },
+  {
+    label: "Policy guidelines",
+    icon: ShieldCheck,
+    href: "/policy-guidelines",
+    roles: ["admin"],
+  },
+  {
+    label: "Organisation",
+    icon: ShieldCheck,
+    href: "/organisation",
+    roles: ["admin"],
+  },
+  {
+    label: "Auditor logs",
+    icon: ScrollText,
+    href: "/audit-logs",
+    roles: ["auditor"],
+  },
 ];
 
 export function SubHeader({ className }: { className?: string }) {
   const pathname = usePathname();
+  const visibleNavItems = NAV_ITEMS.filter((item) => item.roles.includes(role));
 
   return (
     <div className={cn("border-b bg-background", className)}>
       <nav className="mx-auto flex max-w-7xl items-center gap-4 overflow-x-auto px-4 sm:gap-6 sm:px-6 lg:px-8 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {NAV_ITEMS.map(({ label, icon: Icon, href }) => {
+        {visibleNavItems.map(({ label, icon: Icon, href }) => {
           const isActive = pathname === href;
           return (
             <Link

@@ -71,7 +71,7 @@ export function formatDate(dateStr: string) {
   });
 }
 
-export function buildColumnDefs(): ColDef<ExpenseClaim>[] {
+export function buildColumnDefs(onView: (claim: ExpenseClaim) => void): ColDef<ExpenseClaim>[] {
   return [
     {
       headerName: "Claim Ref",
@@ -138,10 +138,11 @@ export function buildColumnDefs(): ColDef<ExpenseClaim>[] {
       minWidth: 100,
       sortable: false,
       filter: false,
-      cellRenderer: () => (
+      cellRenderer: (params: ICellRendererParams<ExpenseClaim>) => (
         <button
           type="button"
           className="text-sm font-medium text-secondary hover:underline"
+          onClick={() => params.data && onView(params.data)}
         >
           View
         </button>

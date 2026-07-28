@@ -24,6 +24,7 @@ import { INITIAL_CLAIMS } from "@/data/initialClaims";
 import type { ClaimStatus, ExpenseCategory, ExpenseClaim } from "@/types";
 
 import { buildColumnDefs, STATUS_LABELS } from "./columns";
+import { ClaimDetailDialog } from "./ClaimDetailDialog";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -53,8 +54,18 @@ function MyClaims() {
   const [search, setSearch] = React.useState("");
   const [category, setCategory] = React.useState<string>(ALL_CATEGORIES);
   const [status, setStatus] = React.useState<string>(ALL_STATUSES);
+  const [selectedClaim, setSelectedClaim] = React.useState<ExpenseClaim | null>(null);
+  const [isDetailOpen, setIsDetailOpen] = React.useState(false);
 
-  const columnDefs = React.useMemo<ColDef<ExpenseClaim>[]>(() => buildColumnDefs(), []);
+  const handleView = React.useCallback((claim: ExpenseClaim) => {
+    setSelectedClaim(claim);
+    setIsDetailOpen(true);
+  }, []);
+
+  const columnDefs = React.useMemo<ColDef<ExpenseClaim>[]>(
+    () => buildColumnDefs(handleView),
+    [handleView]
+  );
 
   const rowData = React.useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -150,8 +161,15 @@ function MyClaims() {
           domLayout="normal"
           rowHeight={56}
           headerHeight={44}
+          suppressCellFocus
         />
       </div>
+
+      <ClaimDetailDialog
+        claim={selectedClaim}
+        open={isDetailOpen}
+        onOpenChange={setIsDetailOpen}
+      />
     </div>
   );
 }
