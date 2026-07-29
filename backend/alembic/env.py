@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.config import settings  # noqa: E402
 from app.core.database import Base  # noqa: E402
 import app.models  # noqa: E402,F401  (registers all models on Base.metadata)
+import app.ai.models  # noqa: E402,F401  (registers the AI platform tables too)
 
 config = context.config
 

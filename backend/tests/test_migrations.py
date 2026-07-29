@@ -61,9 +61,16 @@ def test_single_migration_head():
 
 
 def test_revision_chain_is_linear_and_ordered():
+    """Newest-first walk of the whole chain.
+
+    Deliberately a hard-coded list rather than a computed one: adding a revision should require
+    updating this test, which is how a reviewer is forced to notice a new migration and confirm its
+    place in the order.
+    """
     script = ScriptDirectory.from_config(alembic_config())
     revisions = list(script.walk_revisions())
     assert [r.revision for r in revisions] == [
+        "0004_ai_knowledge_platform",
         "0003_seed_reference_data",
         "0002_phase1_core_domain",
         "0001_initial_receipts",
