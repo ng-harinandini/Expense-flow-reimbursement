@@ -68,10 +68,22 @@ def get_session_factory() -> sessionmaker:
 
 
 def get_db() -> Generator[Session, None, None]:
-    """FastAPI dependency: yields a session and always closes it."""
+    """FastAPI dependency: yields the request-scoped session.
+
+    Rolls back on an unhandled exception so a failed request can never leave a half-applied
+    transaction behind, and always closes. It deliberately does **not** commit: committing is the
+    route's explicit act (see :class:`app.core.unit_of_work.UnitOfWork`), so a commit failure is
+    reported inside the response rather than after it has been sent.
+
+    Every repository and service in one request receives this same session, which is what makes a
+    business change and its audit record atomic.
+    """
     session = get_session_factory()()
     try:
         yield session
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
 

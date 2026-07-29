@@ -1,7 +1,7 @@
 from typing import Optional
 from urllib.parse import quote_plus
 
-from pydantic import Field, computed_field
+from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     API_PREFIX: str = "/api"
     GEMINI_API_KEY: str = ""
+
+    # Root log level for the structured JSON logger (app.core.logging).
+    LOG_LEVEL: str = "INFO"
 
     # --- Database (PostgreSQL only) ---
     DATABASE_URL: Optional[str] = None

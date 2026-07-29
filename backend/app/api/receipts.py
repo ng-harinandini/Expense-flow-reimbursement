@@ -4,6 +4,10 @@ Endpoints:
   POST /receipts/upload   multipart file (+ optional employeeId) → 201 detail
   GET  /receipts          list (summary-level)
   GET  /receipts/{id}     full record incl. raw Textract JSON, fields, line items
+
+Phase 1 changes: queries moved into ``ReceiptRepository`` (no SQL in the route), the upload is
+linked to the employee row via ``employee_ref_id`` as well as the external code, the write is
+audited, and the transaction boundary is the explicit ``UnitOfWork`` commit.
 """
 
 from __future__ import annotations
@@ -13,25 +17,36 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 
-from app.core.database import get_db
+from app.core.deps import (
+    CurrentUser,
+    get_audit_service,
+    get_current_user,
+    get_employee_service,
+    get_receipt_repository,
+    get_unit_of_work,
+    require_roles,
+)
+from app.core.unit_of_work import UnitOfWork
+from app.domain.actor import Actor
+from app.models.enums import AuditAction, AuditEntity
 from app.models.receipt import (
     ExtractionStatus,
     Receipt,
     ReceiptField,
     ReceiptLineItem,
 )
+from app.repositories.receipt_repository import ReceiptRepository
 from app.schemas.schemas import (
     ReceiptDetailSchema,
     ReceiptSummarySchema,
     ReceiptUploadResponseSchema,
 )
+from app.services.audit_service import AuditService
+from app.services.employee_service import EmployeeService
 from app.services.s3_service import upload_receipt_to_s3
 from app.services.textract_service import analyze_receipt_with_textract
-from app.core.deps import CurrentUser, get_current_user, require_roles
 
 router = APIRouter(prefix="/receipts", tags=["Receipts"])
 
@@ -131,11 +146,16 @@ def _serialize_detail(r: Receipt) -> dict:
 async def upload_receipt(
     file: UploadFile = File(...),
     employeeId: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
     current: CurrentUser = Depends(require_roles("employee")),
+    receipts: ReceiptRepository = Depends(get_receipt_repository),
+    employees: EmployeeService = Depends(get_employee_service),
+    audit: AuditService = Depends(get_audit_service),
+    uow: UnitOfWork = Depends(get_unit_of_work),
 ):
     # Bind the receipt to the authenticated employee — ignore any client-supplied employeeId.
-    employeeId = current.employee_id
+    actor = Actor.from_current_user(current)
+    employee = employees.find_actor_employee(actor)
+    employeeId = employee.employee_code if employee else current.employee_id
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
@@ -165,6 +185,7 @@ async def upload_receipt(
         s3_key=s3.get("key"),
         s3_region=s3.get("region"),
         employee_id=employeeId,
+        employee_ref_id=employee.id if employee else None,
         extraction_status=ExtractionStatus.COMPLETED
         if not extraction.get("error")
         else ExtractionStatus.FAILED,
@@ -200,9 +221,25 @@ async def upload_receipt(
             )
         )
 
-    db.add(receipt)
-    db.commit()
-    db.refresh(receipt)
+    receipts.add(receipt)
+
+    audit.record(
+        actor=actor,
+        action=AuditAction.RECEIPT_UPLOAD,
+        entity_type=AuditEntity.RECEIPT,
+        entity_id=str(receipt.id),
+        details=(
+            f"Uploaded receipt '{receipt.file_name}' "
+            f"({receipt.extraction_status.value}, source={receipt.extraction_source})."
+        ),
+        after={
+            "receiptId": str(receipt.id),
+            "employeeId": employeeId,
+            "extractionStatus": receipt.extraction_status.value,
+            "vendorName": receipt.vendor_name,
+        },
+    )
+    uow.commit()
 
     return _serialize_detail(receipt)
 
@@ -210,31 +247,30 @@ async def upload_receipt(
 @router.get("", response_model=List[ReceiptSummarySchema])
 def list_receipts(
     employeeId: Optional[str] = None,
-    db: Session = Depends(get_db),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     current: CurrentUser = Depends(get_current_user),
+    receipts: ReceiptRepository = Depends(get_receipt_repository),
 ):
     # Employees see only their own receipts — ignore any employeeId they pass.
     if current.role == "employee":
         employeeId = current.employee_id
-    stmt = select(Receipt).order_by(Receipt.created_at.desc())
-    if employeeId:
-        stmt = stmt.where(Receipt.employee_id == employeeId)
-    rows = db.execute(stmt).scalars().all()
+    rows = receipts.list_for_employee_code(employeeId, limit=limit, offset=offset)
     return [_serialize_summary(r) for r in rows]
 
 
 @router.get("/{receipt_id}", response_model=ReceiptDetailSchema)
 def get_receipt(
     receipt_id: str,
-    db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
+    receipts: ReceiptRepository = Depends(get_receipt_repository),
 ):
     try:
         rid = uuid.UUID(receipt_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid receipt id.")
 
-    receipt = db.get(Receipt, rid)
+    receipt = receipts.get(rid)
     if receipt is None:
         raise HTTPException(status_code=404, detail="Receipt not found.")
     # Employees may only read their own receipts; 404 avoids leaking existence.

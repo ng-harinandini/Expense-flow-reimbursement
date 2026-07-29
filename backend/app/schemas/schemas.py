@@ -1,6 +1,8 @@
-from typing import List, Optional, Any, Union, Dict
-from pydantic import BaseModel, Field
-from datetime import datetime
+from typing import Annotated, Any, Dict, List, Optional, Union
+from datetime import date
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 class EmployeeSchema(BaseModel):
     id: str
@@ -111,29 +113,181 @@ class ExpenseClaimSchema(BaseModel):
     workflowHistory: List[WorkflowStepSchema] = []
     comments: List[CommentSchema] = []
 
+# Money on the wire. ``gt=0`` rejects zero and negative amounts before any query runs;
+# ``max_digits``/``decimal_places`` mirror the NUMERIC(14,2) columns so a value that the database
+# would reject is refused at the edge with a field-level message instead of a 500.
+MoneyAmount = Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=2)]
+
+# Grace for a client whose local date is a day ahead of the server's UTC date.
+_FUTURE_DATE_GRACE_DAYS = 1
+
+
 class ExpenseClaimCreateSchema(BaseModel):
-    employeeId: Optional[str] = None
-    category: Optional[str] = "Misc / Other"
-    subCategory: Optional[str] = "General Expense"
-    amount: float
-    currency: Optional[str] = "USD"
-    amountUSD: Optional[float] = None
-    merchantVendor: str
-    expenseDate: Optional[str] = None
+    """Request body for ``POST /claims`` (create + submit).
+
+    Shape validation only — anything needing the database (employee exists, duplicate, receipt
+    already claimed) is enforced by ``app.domain.validators`` inside the service.
+
+    ``employeeId`` is accepted for backwards compatibility but ignored: the owner is always bound
+    to the authenticated identity so a caller cannot file a claim against someone else.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    employeeId: Optional[str] = Field(
+        default=None, deprecated="Ignored — the claim owner is taken from the access token."
+    )
+    category: Optional[str] = Field(default="Misc / Other", max_length=64)
+    subCategory: Optional[str] = Field(default="General Expense", max_length=120)
+    amount: MoneyAmount
+    currency: Optional[str] = Field(default="USD", min_length=3, max_length=3)
+    amountUSD: Optional[MoneyAmount] = None
+    merchantVendor: str = Field(min_length=1, max_length=200)
+    expenseDate: Optional[date] = None
     purposeDescription: Optional[str] = ""
-    attendees: Optional[str] = None
-    tripLog: Optional[str] = None
+    attendees: Optional[str] = Field(default=None, max_length=4000)
+    tripLog: Optional[Union[str, Dict[str, Any]]] = None
     hasPreApproval: Optional[bool] = False
-    preApprovalDocRef: Optional[str] = None
+    preApprovalDocRef: Optional[str] = Field(default=None, max_length=200)
     receiptAttached: Optional[bool] = True
     receiptUrl: Optional[str] = None
+    receiptId: Optional[str] = Field(
+        default=None, description="Id of an uploaded receipt to attach (must be unclaimed)."
+    )
     extractedReceipt: Optional[ReceiptDataSchema] = None
+    fxRate: Optional[Decimal] = Field(default=None, gt=0)
+
+    @field_validator("currency")
+    @classmethod
+    def _iso_currency(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        code = value.strip().upper()
+        if len(code) != 3 or not code.isalpha():
+            raise ValueError("must be a 3-letter ISO 4217 currency code")
+        return code
+
+    @field_validator("expenseDate")
+    @classmethod
+    def _not_future(cls, value: Optional[date]) -> Optional[date]:
+        if value is not None and (value - date.today()).days > _FUTURE_DATE_GRACE_DAYS:
+            raise ValueError("cannot be in the future")
+        return value
+
+    @model_validator(mode="after")
+    def _default_amount_usd(self) -> "ExpenseClaimCreateSchema":
+        """Single-currency claims need no conversion: USD total defaults to the amount."""
+        if self.amountUSD is None:
+            self.amountUSD = self.amount
+        return self
+
+
+class ExpenseClaimUpdateSchema(BaseModel):
+    """Request body for ``PATCH /claims/{id}`` — editing a claim that is still a draft.
+
+    Every field is optional; only the keys present are applied.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    category: Optional[str] = Field(default=None, max_length=64)
+    subCategory: Optional[str] = Field(default=None, max_length=120)
+    amount: Optional[MoneyAmount] = None
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+    amountUSD: Optional[MoneyAmount] = None
+    merchantVendor: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    expenseDate: Optional[date] = None
+    purposeDescription: Optional[str] = None
+    attendees: Optional[str] = Field(default=None, max_length=4000)
+    receiptUrl: Optional[str] = None
+    preApprovalDocRef: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("currency")
+    @classmethod
+    def _iso_currency(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        code = value.strip().upper()
+        if len(code) != 3 or not code.isalpha():
+            raise ValueError("must be a 3-letter ISO 4217 currency code")
+        return code
+
+    @field_validator("expenseDate")
+    @classmethod
+    def _not_future(cls, value: Optional[date]) -> Optional[date]:
+        if value is not None and (value - date.today()).days > _FUTURE_DATE_GRACE_DAYS:
+            raise ValueError("cannot be in the future")
+        return value
+
 
 class ActionRequestSchema(BaseModel):
-    action: str  # APPROVE, REJECT, DISBURSE, FLAG_FRAUD
-    actorName: Optional[str] = "Manager"
-    actorRole: Optional[str] = "manager"
-    notes: Optional[str] = ""
+    """Request body for ``POST /claims/{id}/action``.
+
+    ``actorName`` / ``actorRole`` are retained for compatibility but ignored — the actor is the
+    authenticated caller, never a client-supplied string.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    action: str = Field(
+        pattern="^(APPROVE|REJECT|DISBURSE|FLAG_FRAUD)$",
+        description="APPROVE, REJECT, DISBURSE, or FLAG_FRAUD.",
+    )
+    actorName: Optional[str] = Field(default=None, deprecated="Ignored — taken from the token.")
+    actorRole: Optional[str] = Field(default=None, deprecated="Ignored — taken from the token.")
+    notes: Optional[str] = Field(default="", max_length=4000)
+    expectedVersion: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Claim 'version' from the last read. When supplied, a concurrent modification is "
+            "rejected with 409 instead of silently overwriting the other decision."
+        ),
+    )
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _normalize_action(cls, value: Any) -> Any:
+        return value.strip().upper() if isinstance(value, str) else value
+
+
+class AssignReviewerSchema(BaseModel):
+    """Request body for ``POST /claims/{id}/assign``. ``null`` clears the assignment."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    reviewerId: Optional[str] = Field(
+        default=None, description="Employee code of the reviewer (e.g. 'emp-101'); null to clear."
+    )
+    notes: Optional[str] = Field(default=None, max_length=4000)
+
+
+class CommentCreateSchema(BaseModel):
+    """Request body for ``POST /claims/{id}/comments``."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    text: str = Field(min_length=1, max_length=4000)
+    isInternal: bool = Field(
+        default=False, description="Reviewer-only note; hidden from the claim owner."
+    )
+
+
+class ClaimStatusHistorySchema(BaseModel):
+    """One entry of ``GET /claims/{id}/history``."""
+
+    sequence: int
+    fromStatus: Optional[str] = None
+    toStatus: str
+    stepName: str
+    action: str
+    outcome: str
+    notes: Optional[str] = None
+    actorName: Optional[str] = None
+    actorRole: Optional[str] = None
+    occurredAt: Optional[str] = None
+    requestId: Optional[str] = None
+    correlationId: Optional[str] = None
 
 class LoginRequestSchema(BaseModel):
     email: str
@@ -205,13 +359,39 @@ class AdminUserListSchema(BaseModel):
 
 
 class PolicyRuleDefinitionSchema(BaseModel):
-    category: str
-    maxAmountUSD: Union[float, str]
-    autoApproveLimitUSD: Optional[float] = None
-    receiptRequiredAboveUSD: float
-    requiresPreApproval: bool
-    gradeTier: str
-    specialRules: Optional[List[str]] = []
+    """One entry of the policy ruleset, as ``GET``/``PUT /policy-rules`` exchange it.
+
+    ``maxAmountUSD`` stays a number-or-prose union ("Per signed agreement"): the service stores a
+    numeric value in ``expense_limit`` and prose in ``limit_expression``.
+
+    The trailing fields are additive read-only metadata from the ``policy_rules`` table — a client
+    may echo ``code`` back on ``PUT`` to update a specific rule; omitting it derives the code from
+    the category, which is how the existing frontend payload keeps working.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    category: str = Field(min_length=1, max_length=64)
+    maxAmountUSD: Optional[Union[Decimal, str]] = None
+    autoApproveLimitUSD: Optional[Decimal] = Field(default=None, ge=0)
+    receiptRequiredAboveUSD: Optional[Decimal] = Field(default=Decimal("0"), ge=0)
+    requiresPreApproval: bool = False
+    gradeTier: Optional[str] = Field(default="All Staff", max_length=64)
+    specialRules: Optional[List[str]] = Field(default_factory=list)
+
+    # Additive / optional durable-model fields.
+    code: Optional[str] = Field(default=None, max_length=64)
+    name: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = None
+    country: Optional[str] = Field(default=None, min_length=2, max_length=2)
+    currency: Optional[str] = Field(default="USD", min_length=3, max_length=3)
+    priority: Optional[int] = Field(default=100, ge=0, le=10_000)
+    conditions: Optional[Dict[str, Any]] = None
+    actions: Optional[Dict[str, Any]] = None
+    version: Optional[int] = None
+    isActive: Optional[bool] = None
+    effectiveDate: Optional[str] = None
+    expirationDate: Optional[str] = None
 
 class AuditLogEntrySchema(BaseModel):
     id: str

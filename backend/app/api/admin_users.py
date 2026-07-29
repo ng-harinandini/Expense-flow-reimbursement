@@ -14,7 +14,16 @@ from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.core.config import settings
-from app.core.deps import VALID_ROLES, CurrentUser, require_roles
+from app.core.deps import (
+    VALID_ROLES,
+    CurrentUser,
+    get_audit_service,
+    get_unit_of_work,
+    require_roles,
+)
+from app.core.unit_of_work import UnitOfWork
+from app.domain.actor import Actor
+from app.models.enums import AuditAction, AuditEntity
 from app.schemas.schemas import (
     AdminChangeRoleSchema,
     AdminCreateUserSchema,
@@ -22,8 +31,8 @@ from app.schemas.schemas import (
     AdminUserListSchema,
     AdminUserSummarySchema,
 )
+from app.services.audit_service import AuditService
 from app.services.cognito import cognito_client
-from app.services.store import add_audit_log
 
 ROLE_ATTR = "custom:role_id"
 EMPLOYEE_ID_ATTR = "custom:employeeId"
@@ -96,10 +105,44 @@ def _sub_of(client, email: str) -> Optional[str]:
     return attrs.get("sub")
 
 
+def _audit_user_change(
+    audit: AuditService,
+    uow: UnitOfWork,
+    admin: CurrentUser,
+    *,
+    action: AuditAction,
+    entity_id: str,
+    details: str,
+    before: Optional[dict] = None,
+    after: Optional[dict] = None,
+) -> None:
+    """Persist one user-management audit record and commit it.
+
+    Cognito is the system of record for the user itself, so the local transaction contains only
+    this audit row — committed here because the Cognito call has already succeeded and must not be
+    left unrecorded.
+    """
+    audit.record(
+        actor=Actor.from_current_user(admin),
+        action=action,
+        entity_type=AuditEntity.USER,
+        entity_id=entity_id,
+        details=details,
+        before=before,
+        after=after,
+    )
+    uow.commit()
+
+
 # --- endpoints (all admin-only) ----------------------------------------------
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=AdminUserSummarySchema)
-def create_user(payload: AdminCreateUserSchema, admin: CurrentUser = Depends(require_roles("admin"))):
+def create_user(
+    payload: AdminCreateUserSchema,
+    admin: CurrentUser = Depends(require_roles("admin")),
+    audit: AuditService = Depends(get_audit_service),
+    uow: UnitOfWork = Depends(get_unit_of_work),
+):
     _require_configured()
     role = _validate_role(payload.role)
     email = _norm_email(payload.email)
@@ -130,8 +173,13 @@ def create_user(payload: AdminCreateUserSchema, admin: CurrentUser = Depends(req
 
     user = resp.get("User", {})
     attrs = _attrs_to_dict(user.get("Attributes", []))
-    add_audit_log(admin.email or "admin", "admin", "USER_CREATE",
-                  attrs.get("sub") or email, f"Created user {email} with role {role}")
+    _audit_user_change(
+        audit, uow, admin,
+        action=AuditAction.USER_CREATE,
+        entity_id=attrs.get("sub") or email,
+        details=f"Created user {email} with role {role}",
+        after={"email": email, "role": role, "employeeId": payload.employeeId},
+    )
     return _summary(user.get("Username"), attrs, user.get("Enabled"), user.get("UserStatus"))
 
 
@@ -172,7 +220,9 @@ def get_user(email: str, _admin: CurrentUser = Depends(require_roles("admin"))):
 
 @router.patch("/{email}", response_model=AdminUserSummarySchema)
 def update_user(email: str, payload: AdminUpdateUserSchema,
-                admin: CurrentUser = Depends(require_roles("admin"))):
+                admin: CurrentUser = Depends(require_roles("admin")),
+                audit: AuditService = Depends(get_audit_service),
+                uow: UnitOfWork = Depends(get_unit_of_work)):
     _require_configured()
     email = _norm_email(email)
     updates = []
@@ -195,19 +245,30 @@ def update_user(email: str, payload: AdminUpdateUserSchema,
 
     resp = _get_user_raw(client, email)
     attrs = _attrs_to_dict(resp.get("UserAttributes", []))
-    add_audit_log(admin.email or "admin", "admin", "USER_UPDATE",
-                  attrs.get("sub") or email, f"Updated attributes for {email}")
+    _audit_user_change(
+        audit, uow, admin,
+        action=AuditAction.USER_UPDATE,
+        entity_id=attrs.get("sub") or email,
+        details=f"Updated attributes for {email}",
+        after={"attributes": [u["Name"] for u in updates]},
+    )
     return _summary(resp.get("Username"), attrs, resp.get("Enabled"), resp.get("UserStatus"))
 
 
 @router.post("/{email}/role", response_model=AdminUserSummarySchema)
 def change_role(email: str, payload: AdminChangeRoleSchema,
-                admin: CurrentUser = Depends(require_roles("admin"))):
+                admin: CurrentUser = Depends(require_roles("admin")),
+                audit: AuditService = Depends(get_audit_service),
+                uow: UnitOfWork = Depends(get_unit_of_work)):
     _require_configured()
     role = _validate_role(payload.role)
     email = _norm_email(email)
 
     client = cognito_client()
+    # Read the current role first so the audit record carries a real before/after.
+    previous_role = _attrs_to_dict(_get_user_raw(client, email).get("UserAttributes", [])).get(
+        ROLE_ATTR
+    )
     try:
         client.admin_update_user_attributes(
             UserPoolId=settings.COGNITO_USER_POOL_ID,
@@ -221,22 +282,33 @@ def change_role(email: str, payload: AdminChangeRoleSchema,
 
     resp = _get_user_raw(client, email)
     attrs = _attrs_to_dict(resp.get("UserAttributes", []))
-    add_audit_log(admin.email or "admin", "admin", "USER_ROLE_CHANGE",
-                  attrs.get("sub") or email, f"Set custom:role_id={role} for {email}")
+    _audit_user_change(
+        audit, uow, admin,
+        action=AuditAction.USER_ROLE_CHANGE,
+        entity_id=attrs.get("sub") or email,
+        details=f"Set custom:role_id={role} for {email}",
+        before={"role": previous_role},
+        after={"role": role},
+    )
     return _summary(resp.get("Username"), attrs, resp.get("Enabled"), resp.get("UserStatus"))
 
 
 @router.post("/{email}/enable", response_model=AdminUserSummarySchema)
-def enable_user(email: str, admin: CurrentUser = Depends(require_roles("admin"))):
-    return _set_enabled(email, True, admin)
+def enable_user(email: str, admin: CurrentUser = Depends(require_roles("admin")),
+                audit: AuditService = Depends(get_audit_service),
+                uow: UnitOfWork = Depends(get_unit_of_work)):
+    return _set_enabled(email, True, admin, audit, uow)
 
 
 @router.post("/{email}/disable", response_model=AdminUserSummarySchema)
-def disable_user(email: str, admin: CurrentUser = Depends(require_roles("admin"))):
-    return _set_enabled(email, False, admin)
+def disable_user(email: str, admin: CurrentUser = Depends(require_roles("admin")),
+                 audit: AuditService = Depends(get_audit_service),
+                 uow: UnitOfWork = Depends(get_unit_of_work)):
+    return _set_enabled(email, False, admin, audit, uow)
 
 
-def _set_enabled(email: str, enabled: bool, admin: CurrentUser) -> AdminUserSummarySchema:
+def _set_enabled(email: str, enabled: bool, admin: CurrentUser,
+                 audit: AuditService, uow: UnitOfWork) -> AdminUserSummarySchema:
     _require_configured()
     email = _norm_email(email)
     client = cognito_client()
@@ -250,8 +322,12 @@ def _set_enabled(email: str, enabled: bool, admin: CurrentUser) -> AdminUserSumm
 
     resp = _get_user_raw(client, email)
     attrs = _attrs_to_dict(resp.get("UserAttributes", []))
-    add_audit_log(admin.email or "admin", "admin",
-                  "USER_ENABLE" if enabled else "USER_DISABLE",
-                  attrs.get("sub") or email,
-                  f"{'Enabled' if enabled else 'Disabled'} user {email}")
+    _audit_user_change(
+        audit, uow, admin,
+        action=AuditAction.USER_ENABLE if enabled else AuditAction.USER_DISABLE,
+        entity_id=attrs.get("sub") or email,
+        details=f"{'Enabled' if enabled else 'Disabled'} user {email}",
+        before={"enabled": not enabled},
+        after={"enabled": enabled},
+    )
     return _summary(resp.get("Username"), attrs, resp.get("Enabled"), resp.get("UserStatus"))

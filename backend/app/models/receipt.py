@@ -59,7 +59,15 @@ class Receipt(Base):
     s3_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     s3_region: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # External employee code (``custom:employeeId``) as supplied at upload time. Kept because the
+    # API filters on it and older rows only ever had this; ``employee_ref_id`` is the real link.
     employee_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
+    employee_ref_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("employees.id", ondelete="SET NULL", name="fk_receipts_employee_ref_id"),
+        nullable=True,
+        index=True,
+    )
 
     extraction_status: Mapped[ExtractionStatus] = mapped_column(
         extraction_status_enum,
@@ -84,6 +92,10 @@ class Receipt(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    employee: Mapped[Optional["Employee"]] = relationship(  # noqa: F821
+        "Employee", lazy="selectin"
     )
 
     fields: Mapped[List["ReceiptField"]] = relationship(

@@ -2,10 +2,13 @@
 
 Auth is simulated via dependency-override on get_current_user; the boto3 Cognito client is
 replaced with a fake that records calls. No AWS account required.
+
+Phase 1 update: these routes now write a durable audit record for every mutation, so they use the
+shared ``client`` fixture from ``conftest`` (transaction-scoped test database) instead of a bare
+``TestClient``.
 """
 
 import pytest
-from fastapi.testclient import TestClient
 
 import app.api.admin_users as admin_module
 from app.core import deps
@@ -61,13 +64,6 @@ def fake(monkeypatch):
     monkeypatch.setattr(settings, "COGNITO_USER_POOL_ID", "ap-south-1_test", raising=False)
     monkeypatch.setattr(settings, "COGNITO_APP_CLIENT_ID", "cid", raising=False)
     return f
-
-
-@pytest.fixture
-def client():
-    c = TestClient(app)
-    yield c
-    app.dependency_overrides.clear()
 
 
 def as_role(role, **kw):
