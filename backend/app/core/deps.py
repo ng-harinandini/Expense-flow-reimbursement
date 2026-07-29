@@ -28,10 +28,11 @@ from app.domain.actor import Actor
 from app.repositories.ai_inference_repository import AIInferenceRepository
 from app.repositories.audit_repository import AuditLogRepository
 from app.repositories.claim_repository import ClaimRepository
-from app.repositories.employee_repository import DepartmentRepository, EmployeeRepository
+from app.repositories.employee_repository import EmployeeRepository
 from app.repositories.fraud_repository import FraudResultRepository
 from app.repositories.policy_rule_repository import PolicyRuleRepository
 from app.repositories.receipt_repository import ReceiptRepository
+from app.repositories.role_repository import RoleRepository
 from app.repositories.workflow_repository import ApprovalWorkflowRepository
 from app.services.audit_service import AuditService
 from app.services.claim_service import ClaimService
@@ -131,8 +132,8 @@ def get_employee_repository(db: Session = Depends(get_db)) -> EmployeeRepository
     return EmployeeRepository(db)
 
 
-def get_department_repository(db: Session = Depends(get_db)) -> DepartmentRepository:
-    return DepartmentRepository(db)
+def get_role_repository(db: Session = Depends(get_db)) -> RoleRepository:
+    return RoleRepository(db)
 
 
 def get_policy_rule_repository(db: Session = Depends(get_db)) -> PolicyRuleRepository:
@@ -169,9 +170,9 @@ def get_audit_service(
 
 def get_employee_service(
     employee_repository: EmployeeRepository = Depends(get_employee_repository),
-    department_repository: DepartmentRepository = Depends(get_department_repository),
+    role_repository: RoleRepository = Depends(get_role_repository),
 ) -> EmployeeService:
-    return EmployeeService(employee_repository, department_repository)
+    return EmployeeService(employee_repository, role_repository)
 
 
 def get_policy_rule_service(

@@ -1,28 +1,16 @@
-"""Department and employee lookups."""
+"""Employee lookups."""
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+import re
+from typing import Dict, Optional, Sequence
 
 from sqlalchemy import select
 
-from app.models.organization import Department, Employee
+from app.models.organization import Employee
 from app.repositories.base import BaseRepository
 
-
-class DepartmentRepository(BaseRepository[Department]):
-    model = Department
-
-    def get_by_code(self, code: str) -> Optional[Department]:
-        return self._one_or_none(select(Department).where(Department.code == code))
-
-    def get_by_name(self, name: str) -> Optional[Department]:
-        return self._one_or_none(select(Department).where(Department.name == name))
-
-    def list_active(self) -> Sequence[Department]:
-        return self._all(
-            select(Department).where(Department.is_active.is_(True)).order_by(Department.name)
-        )
+_EMPLOYEE_CODE_RE = re.compile(r"^emp-(\d+)$")
 
 
 class EmployeeRepository(BaseRepository[Employee]):
@@ -35,6 +23,14 @@ class EmployeeRepository(BaseRepository[Employee]):
         return self._one_or_none(
             select(Employee).where(Employee.employee_code == employee_code)
         )
+
+    def get_by_codes(self, employee_codes: Sequence[str]) -> Dict[str, Employee]:
+        """Batch lookup by external code, keyed by the code — avoids N+1 when enriching a page."""
+        codes = [c for c in employee_codes if c]
+        if not codes:
+            return {}
+        rows = self._all(select(Employee).where(Employee.employee_code.in_(codes)))
+        return {row.employee_code: row for row in rows}
 
     def get_by_cognito_sub(self, sub: str) -> Optional[Employee]:
         if not sub:
@@ -72,6 +68,11 @@ class EmployeeRepository(BaseRepository[Employee]):
         )
         return self._all(self._paginate(stmt, limit=limit, offset=offset))
 
+    def list_page(self, *, limit: Optional[int] = None, offset: int = 0) -> Sequence[Employee]:
+        """Ordered page over every employee (active and inactive), for admin listings."""
+        stmt = select(Employee).order_by(Employee.employee_code)
+        return self._all(self._paginate(stmt, limit=limit, offset=offset))
+
     def list_direct_reports(self, manager_id) -> Sequence[Employee]:
         return self._all(
             select(Employee)
@@ -85,3 +86,17 @@ class EmployeeRepository(BaseRepository[Employee]):
             employee.cognito_sub = sub
             self.session.flush()
         return employee
+
+    def next_employee_code(self) -> str:
+        """Allocate the next ``emp-NNN`` code, based on the highest existing numeric suffix.
+
+        ``emp-001`` when no employee rows exist yet. Parsed in Python (not a SQL regex cast) so
+        the digit width can grow past 3 without ever mis-ordering lexicographically.
+        """
+        codes = self.session.execute(select(Employee.employee_code)).scalars().all()
+        max_suffix = 0
+        for code in codes:
+            match = _EMPLOYEE_CODE_RE.match(code)
+            if match:
+                max_suffix = max(max_suffix, int(match.group(1)))
+        return f"emp-{max_suffix + 1:03d}"

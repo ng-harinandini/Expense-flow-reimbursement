@@ -19,32 +19,44 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { INITIAL_EMPLOYEES_DIRECTORY } from "@/data/employees";
+import {
+  toEmployee,
+  useAdminUsersQuery,
+  useCreateAdminUserMutation,
+  useDeleteAdminUserMutation,
+  useUpdateAdminUserMutation,
+} from "@/api/adminUsers";
+import { useRolesQuery } from "@/api/roles";
 import type { Employee } from "@/types";
 
 import { buildColumnDefs } from "./columns";
 import { DeleteEmployeeDialog } from "./DeleteEmployeeDialog";
 import { EmployeeFormDialog } from "./EmployeeFormDialog";
 import type { EmployeeFormValues } from "./employeeSchema";
-import {
-  ROLE_LABELS,
-  USER_ROLES,
-  managerOptions,
-  nextEmployeeId,
-  orgSubheader,
-} from "./helpers";
+import { ROLE_LABELS, managerOptions } from "./helpers";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const ALL_ROLES = "all-roles";
 
 function Organisation() {
-  // TODO: replace with GET /api/employees once the endpoint exists.
-  const [employees, setEmployees] = React.useState<Employee[]>(
-    INITIAL_EMPLOYEES_DIRECTORY
-  );
+  const { data: usersData, isLoading } = useAdminUsersQuery();
+  const { data: roles } = useRolesQuery();
+  const createAdminUser = useCreateAdminUserMutation();
+  const updateAdminUser = useUpdateAdminUserMutation();
+  const deleteAdminUser = useDeleteAdminUserMutation();
+
+  const [employees, setEmployees] = React.useState<Employee[]>([]);
+  React.useEffect(() => {
+    if (usersData) {
+      setEmployees(usersData.users.map(toEmployee));
+    }
+  }, [usersData]);
+
   const [search, setSearch] = React.useState("");
+  // Filter value is the stringified roles.id (or ALL_ROLES); Radix Select values are always strings.
   const [role, setRole] = React.useState<string>(ALL_ROLES);
+  const activeRoleName = roles?.find((r) => String(r.id) === role)?.name;
 
   const [editingEmployee, setEditingEmployee] = React.useState<Employee | null>(null);
   const [isFormOpen, setIsFormOpen] = React.useState(false);
@@ -67,58 +79,41 @@ function Organisation() {
   }, []);
 
   const handleSave = React.useCallback(
-    (values: EmployeeFormValues) => {
-      setEmployees((current) => {
-        const manager = current.find((e) => e.id === values.managerId);
-        const managerFields = {
-          managerId: manager?.id,
-          managerName: manager?.name,
-        };
+    async (values: EmployeeFormValues) => {
+      // ``values.managerId`` is the manager's employeeRecordId (UUID) — the select is keyed by it.
+      if (editingEmployee) {
+        if (!editingEmployee.employeeRecordId) return;
+        await updateAdminUser.mutateAsync({
+          employeeId: editingEmployee.employeeRecordId,
+          payload: {
+            name: values.name,
+            grade: values.grade,
+            role: values.role,
+            managerId: values.managerId || null,
+            isActive: values.isActive,
+          },
+        });
+        return;
+      }
 
-        // TODO: replace with PUT /api/employees/:id
-        if (editingEmployee) {
-          const updated: Employee = {
-            ...editingEmployee,
-            ...values,
-            ...managerFields,
-          };
-
-          return current.map((employee) => {
-            if (employee.id === updated.id) return updated;
-            // Keep denormalised manager names in sync after a rename.
-            if (employee.managerId === updated.id) {
-              return { ...employee, managerName: updated.name };
-            }
-            return employee;
-          });
-        }
-
-        // TODO: replace with POST /api/employees
-        const created: Employee = {
-          ...values,
-          ...managerFields,
-          id: nextEmployeeId(current),
-          monthlySpendUSD: 0,
-        };
-
-        return [...current, created];
+      await createAdminUser.mutateAsync({
+        email: values.email,
+        name: values.name,
+        grade: values.grade,
+        role: values.role,
+        managerId: values.managerId || undefined,
       });
     },
-    [editingEmployee]
+    [editingEmployee, createAdminUser, updateAdminUser]
   );
 
-  const handleConfirmDelete = React.useCallback((employee: Employee) => {
-    // TODO: replace with DELETE /api/employees/:id
-    setEmployees((current) =>
-      current
-        .filter((e) => e.id !== employee.id)
-        .map((e) =>
-          e.managerId === employee.id
-            ? { ...e, managerId: undefined, managerName: undefined }
-            : e
-        )
-    );
-  }, []);
+  const handleConfirmDelete = React.useCallback(
+    async (employee: Employee) => {
+      if (!employee.employeeRecordId) return;
+      await deleteAdminUser.mutateAsync(employee.employeeRecordId);
+    },
+    [deleteAdminUser]
+  );
 
   const columnDefs = React.useMemo<ColDef<Employee>[]>(
     () => buildColumnDefs(handleEdit, handleDelete),
@@ -134,7 +129,7 @@ function Organisation() {
         employee.id.toLowerCase().includes(query) ||
         employee.name.toLowerCase().includes(query);
 
-      const matchesRole = role === ALL_ROLES || employee.role === role;
+      const matchesRole = role === ALL_ROLES || String(employee.roleId) === role;
 
       return matchesSearch && matchesRole;
     });
@@ -150,7 +145,7 @@ function Organisation() {
   );
 
   const managers = React.useMemo(
-    () => managerOptions(employees, editingEmployee?.id),
+    () => managerOptions(employees, editingEmployee?.employeeRecordId),
     [employees, editingEmployee]
   );
 
@@ -165,7 +160,7 @@ function Organisation() {
   const directReportCount = React.useMemo(
     () =>
       deletingEmployee
-        ? employees.filter((e) => e.managerId === deletingEmployee.id).length
+        ? employees.filter((e) => e.managerId === deletingEmployee.employeeRecordId).length
         : 0,
     [employees, deletingEmployee]
   );
@@ -179,7 +174,9 @@ function Organisation() {
           </div>
           <div className="min-w-0">
             <h2 className="text-xl font-semibold text-foreground">Organisation Directory</h2>
-            <p className="text-sm text-muted-foreground">{orgSubheader(role)}</p>
+            <p className="text-sm text-muted-foreground">
+              Manage employees, grades, reporting lines, and platform roles
+            </p>
           </div>
         </div>
         <Button className="w-full sm:w-auto" onClick={handleAdd}>
@@ -205,9 +202,9 @@ function Organisation() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_ROLES}>All Roles</SelectItem>
-            {USER_ROLES.map((option) => (
-              <SelectItem key={option} value={option}>
-                {ROLE_LABELS[option]}
+            {roles?.map((option) => (
+              <SelectItem key={option.id} value={String(option.id)}>
+                {ROLE_LABELS[option.name] ?? option.name}
               </SelectItem>
             ))}
           </SelectContent>
@@ -218,6 +215,7 @@ function Organisation() {
         <AgGridReact<Employee>
           theme={themeQuartz}
           rowData={rowData}
+          loading={isLoading}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
           getRowId={(params) => params.data.id}

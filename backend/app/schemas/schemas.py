@@ -4,14 +4,6 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-class EmployeeSchema(BaseModel):
-    id: str
-    name: str
-    grade: str
-    department: str
-    email: str
-    managerName: str
-
 class WorkflowStepSchema(BaseModel):
     timestamp: str
     actorName: str
@@ -90,7 +82,6 @@ class ExpenseClaimSchema(BaseModel):
     employeeId: str
     employeeName: str
     employeeGrade: str
-    department: str
     expenseDate: str
     submissionDate: str
     category: str
@@ -329,14 +320,19 @@ class LoginResponseSchema(BaseModel):
 
 class AdminCreateUserSchema(BaseModel):
     email: str
+    name: str                              # backs employees.full_name (NOT NULL)
+    grade: str                             # backs employees.grade
     role: str                              # custom:role_id — must be one of the 5 app roles
-    employeeId: Optional[str] = None       # custom:employeeId (optional ownership link)
-    name: Optional[str] = None
+    managerId: Optional[str] = None        # another employee's UUID (employees.id)
+    employeeId: Optional[str] = None       # deprecated: ignored, the server generates the code
 
 
 class AdminUpdateUserSchema(BaseModel):
-    employeeId: Optional[str] = None
     name: Optional[str] = None
+    grade: Optional[str] = None
+    role: Optional[str] = None
+    managerId: Optional[str] = None
+    isActive: Optional[bool] = None
 
 
 class AdminChangeRoleSchema(BaseModel):
@@ -348,14 +344,27 @@ class AdminUserSummarySchema(BaseModel):
     sub: Optional[str] = None
     email: Optional[str] = None
     role: Optional[str] = None             # custom:role_id
-    employeeId: Optional[str] = None
+    employeeCode: Optional[str] = None     # employees.employee_code (custom:employeeId)
     enabled: Optional[bool] = None
     status: Optional[str] = None
+    employeeId: Optional[str] = None       # employees.id (UUID) — what managerId refers to
+    fullName: Optional[str] = None
+    grade: Optional[str] = None
+    managerId: Optional[str] = None
+    managerName: Optional[str] = None
+    roleId: Optional[int] = None
+    isActive: Optional[bool] = None
 
 
 class AdminUserListSchema(BaseModel):
     users: List[AdminUserSummarySchema] = []
     nextToken: Optional[str] = None
+
+
+class RoleOptionSchema(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
 
 
 class PolicyRuleDefinitionSchema(BaseModel):

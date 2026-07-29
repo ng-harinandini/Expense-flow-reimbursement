@@ -17,7 +17,8 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/Label";
-import type { Employee } from "@/types";
+import { useRolesQuery } from "@/api/roles";
+import type { Employee, UserRole } from "@/types";
 
 import {
   EMPLOYEE_FORM_DEFAULTS,
@@ -42,21 +43,18 @@ function toFormValues(employee: Employee): EmployeeFormValues {
     email: employee.email,
     grade: employee.grade,
     role: employee.role,
-    status: employee.status,
+    isActive: employee.status === "active",
     managerId: employee.managerId ?? "",
   };
 }
 
 interface EmployeeFormDialogProps {
-  /** `null` puts the dialog in "add new user" mode. */
   employee: Employee | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Employees selectable as the reporting manager. */
   managers: Employee[];
-  /** Emails already in use by other employees, for the duplicate check. */
   takenEmails: string[];
-  onSave: (values: EmployeeFormValues) => void;
+  onSave: (values: EmployeeFormValues) => void | Promise<void>;
 }
 
 export function EmployeeFormDialog({
@@ -68,25 +66,48 @@ export function EmployeeFormDialog({
   onSave,
 }: EmployeeFormDialogProps) {
   const isEditing = Boolean(employee);
+  const { data: fetchedRoles } = useRolesQuery();
+  const roleOptions: {
+    key: number | UserRole;
+    value: UserRole;
+    label: string;
+  }[] = fetchedRoles?.length
+    ? fetchedRoles.map((role) => ({
+        key: role.id,
+        value: role.name,
+        label: ROLE_LABELS[role.name] ?? role.name,
+      }))
+    : USER_ROLES.map((role) => ({
+        key: role,
+        value: role,
+        label: ROLE_LABELS[role],
+      }));
 
   const {
     register,
     handleSubmit,
     reset,
     setError,
+    setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<EmployeeFormValues>({
     resolver: yupResolver(employeeSchema),
     defaultValues: EMPLOYEE_FORM_DEFAULTS,
   });
 
+  const isActive = watch("isActive");
+
+  const [submitError, setSubmitError] = React.useState<string | null>(null);
+
   // Reload the form each time the dialog opens so add and edit never leak state.
   React.useEffect(() => {
     if (!open) return;
+    setSubmitError(null);
     reset(employee ? toFormValues(employee) : EMPLOYEE_FORM_DEFAULTS);
   }, [open, employee, reset]);
 
-  const onSubmit = (values: EmployeeFormValues) => {
+  const onSubmit = async (values: EmployeeFormValues) => {
     const email = values.email.trim().toLowerCase();
 
     if (takenEmails.some((taken) => taken.toLowerCase() === email)) {
@@ -97,15 +118,26 @@ export function EmployeeFormDialog({
       return;
     }
 
-    onSave({ ...values, email });
-    onOpenChange(false);
+    setSubmitError(null);
+    try {
+      await onSave({ ...values, email });
+      onOpenChange(false);
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error
+          ? error.message
+          : "Something went wrong. Try again.",
+      );
+    }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-xl">
         <DialogHeader className="pr-8">
-          <DialogTitle>{isEditing ? "Edit employee" : "Add new user"}</DialogTitle>
+          <DialogTitle>
+            {isEditing ? "Edit employee" : "Add new user"}
+          </DialogTitle>
           <DialogDescription>
             {isEditing && employee
               ? `Update the directory record for ${employee.name} (${formatEmployeeId(employee.id)}).`
@@ -128,7 +160,9 @@ export function EmployeeFormDialog({
                 />
               </div>
               {errors.name && (
-                <p className="text-xs text-destructive">{errors.name.message}</p>
+                <p className="text-xs text-destructive">
+                  {errors.name.message}
+                </p>
               )}
             </div>
 
@@ -146,7 +180,9 @@ export function EmployeeFormDialog({
                 />
               </div>
               {errors.email && (
-                <p className="text-xs text-destructive">{errors.email.message}</p>
+                <p className="text-xs text-destructive">
+                  {errors.email.message}
+                </p>
               )}
             </div>
 
@@ -169,7 +205,9 @@ export function EmployeeFormDialog({
                 </select>
               </div>
               {errors.grade && (
-                <p className="text-xs text-destructive">{errors.grade.message}</p>
+                <p className="text-xs text-destructive">
+                  {errors.grade.message}
+                </p>
               )}
             </div>
 
@@ -182,14 +220,16 @@ export function EmployeeFormDialog({
                 {...register("role")}
               >
                 <option value="">Select a role</option>
-                {USER_ROLES.map((role) => (
-                  <option key={role} value={role}>
-                    {ROLE_LABELS[role]}
+                {roleOptions.map((role) => (
+                  <option key={role.key} value={role.value}>
+                    {role.label}
                   </option>
                 ))}
               </select>
               {errors.role && (
-                <p className="text-xs text-destructive">{errors.role.message}</p>
+                <p className="text-xs text-destructive">
+                  {errors.role.message}
+                </p>
               )}
             </div>
 
@@ -203,22 +243,32 @@ export function EmployeeFormDialog({
                   {...register("managerId")}
                 >
                   <option value="">No manager</option>
-                  {managers.map((manager) => (
-                    <option key={manager.id} value={manager.id}>
-                      {manager.name} · {manager.grade}
-                    </option>
-                  ))}
+                  {managers
+                    .filter((manager) => manager.employeeRecordId)
+                    .map((manager) => (
+                      <option
+                        key={manager.employeeRecordId}
+                        value={manager.employeeRecordId}
+                      >
+                        {manager.name} · {manager.grade}
+                      </option>
+                    ))}
                 </select>
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="status">Status</Label>
+              <Label htmlFor="isActive">Status</Label>
               <select
-                id="status"
-                aria-invalid={!!errors.status}
+                id="isActive"
+                aria-invalid={!!errors.isActive}
                 className={`${SELECT_CLASSES} pl-3`}
-                {...register("status")}
+                value={isActive ? "active" : "inactive"}
+                onChange={(e) =>
+                  setValue("isActive", e.target.value === "active", {
+                    shouldDirty: true,
+                  })
+                }
               >
                 {EMPLOYEE_STATUSES.map((status) => (
                   <option key={status} value={status}>
@@ -226,11 +276,19 @@ export function EmployeeFormDialog({
                   </option>
                 ))}
               </select>
-              {errors.status && (
-                <p className="text-xs text-destructive">{errors.status.message}</p>
+              {errors.isActive && (
+                <p className="text-xs text-destructive">
+                  {errors.isActive.message}
+                </p>
               )}
             </div>
           </div>
+
+          {submitError && (
+            <p className="text-sm text-destructive" role="alert">
+              {submitError}
+            </p>
+          )}
 
           <DialogFooter className="border-t pt-4">
             <DialogClose asChild>

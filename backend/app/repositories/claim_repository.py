@@ -48,7 +48,6 @@ class ClaimQuery:
     status: Optional[ClaimStatus] = None
     risk_level: Optional[FraudRiskLevel] = None
     assigned_reviewer_id: Optional[uuid.UUID] = None
-    department_id: Optional[uuid.UUID] = None
     expense_date_from: Optional[date] = None
     expense_date_to: Optional[date] = None
     limit: Optional[int] = None
@@ -121,8 +120,6 @@ class ClaimRepository(BaseRepository[Claim]):
             stmt = stmt.where(Claim.status == query.status)
         if query.assigned_reviewer_id is not None:
             stmt = stmt.where(Claim.assigned_reviewer_id == query.assigned_reviewer_id)
-        if query.department_id is not None:
-            stmt = stmt.where(Claim.department_id == query.department_id)
         if query.expense_date_from is not None:
             stmt = stmt.where(Claim.expense_date >= query.expense_date_from)
         if query.expense_date_to is not None:

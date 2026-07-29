@@ -12,8 +12,10 @@ from app.core.logging import get_logger
 from app.domain.actor import Actor
 from app.domain.errors import NotFoundError
 from app.domain.validators import require_employee
-from app.models.organization import Department, Employee
-from app.repositories.employee_repository import DepartmentRepository, EmployeeRepository
+from app.models.enums import EmployeeGrade
+from app.models.organization import Employee
+from app.repositories.employee_repository import EmployeeRepository
+from app.repositories.role_repository import RoleRepository
 
 logger = get_logger(__name__)
 
@@ -22,10 +24,10 @@ class EmployeeService:
     def __init__(
         self,
         employee_repository: EmployeeRepository,
-        department_repository: DepartmentRepository,
+        role_repository: RoleRepository,
     ) -> None:
         self._employees = employee_repository
-        self._departments = department_repository
+        self._roles = role_repository
 
     # --- resolution ----------------------------------------------------------
 
@@ -73,9 +75,44 @@ class EmployeeService:
     def list_active(self, *, limit: Optional[int] = None, offset: int = 0) -> Sequence[Employee]:
         return self._employees.list_active(limit=limit, offset=offset)
 
-    def list_departments(self) -> Sequence[Department]:
-        return self._departments.list_active()
-
     def manager_of(self, employee: Employee) -> Optional[Employee]:
         """The employee's manager — the default first-step approver."""
         return employee.manager
+
+    def provision_for_admin(
+        self,
+        *,
+        full_name: str,
+        email: str,
+        grade: str,
+        role_name: str,
+        manager_id: Optional[str] = None,
+    ) -> Employee:
+        """Build (flush, not commit) the Postgres ``Employee`` row for a new admin-created user.
+
+        Called before the Cognito account is created, so its generated ``employee_code`` can be
+        used as the ``custom:employeeId`` attribute. The caller (the route) owns the transaction —
+        if the subsequent Cognito call fails, the request-scoped session rolls back and this insert
+        is discarded automatically.
+        """
+        manager = None
+        if manager_id:
+            manager = self._employees.get(manager_id)
+            if manager is None:
+                raise NotFoundError("Employee", manager_id)
+
+        role = self._roles.get_by_name(role_name)
+        if role is None:
+            # Roles are seeded 1:1 with VALID_ROLES; a miss here is a data-integrity bug.
+            raise RuntimeError(f"Role '{role_name}' is not seeded in the roles table.")
+
+        employee = Employee(
+            employee_code=self._employees.next_employee_code(),
+            full_name=full_name,
+            email=email.strip().lower(),
+            grade=EmployeeGrade.coerce(grade),
+            role_id=role.id,
+            manager_id=manager.id if manager else None,
+            is_active=True,
+        )
+        return self._employees.add(employee)

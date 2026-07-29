@@ -1,8 +1,6 @@
-/**
- * Core Data Models & Types for ExpenseFlow AI Platform
- */
-
 export type UserRole = 'employee' | 'manager' | 'finance' | 'admin' | 'auditor';
+
+export type UserRoleIds= 1 | 2 | 3 | 4 | 5;
 
 export type EmployeeGrade = 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'Director' | 'VP';
 
@@ -19,6 +17,8 @@ export interface Employee {
   managerName?: string;
   avatarUrl?: string;
   monthlySpendUSD: number;
+  employeeRecordId?: string;
+  roleId?: number;
 }
 
 export type ExpenseCategory =

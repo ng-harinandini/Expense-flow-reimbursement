@@ -162,7 +162,6 @@ def claim_to_dict(claim: Claim, *, include_internal_comments: bool = True) -> di
         "employeeId": employee.employee_code if employee else None,
         "employeeName": employee.full_name if employee else None,
         "employeeGrade": claim.employee_grade.value,
-        "department": claim.department.name if claim.department else None,
         "expenseDate": _iso_date(claim.expense_date),
         # Historically a date-only string; submission instant is exposed separately.
         "submissionDate": _iso_date(claim.submitted_at.date()) if claim.submitted_at else None,
@@ -217,7 +216,6 @@ def claim_to_engine_input(claim: Claim) -> dict[str, Any]:
         "claimNumber": claim.claim_number,
         "employeeId": employee.employee_code if employee else None,
         "employeeGrade": claim.employee_grade.value,
-        "department": claim.department.name if claim.department else None,
         "expenseDate": _iso_date(claim.expense_date),
         "submissionDate": _iso_date(
             claim.submitted_at.date() if claim.submitted_at else date.today()
