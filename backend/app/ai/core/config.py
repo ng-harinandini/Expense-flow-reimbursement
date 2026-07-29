@@ -133,6 +133,14 @@ class AISettings(BaseSettings):
     RERANK_TOP_N: int = 8
     RERANK_TIMEOUT_SECONDS: float = 15.0
     COHERE_API_KEY: Optional[str] = None
+    VOYAGE_API_KEY: Optional[str] = None
+
+    # --- self-hosted HuggingFace TEI endpoint (BGE / E5 / Instructor) --------
+    TEI_BASE_URL: Optional[str] = None
+    # E5 and Instructor require an instruction prefix and lose recall without it; bge-m3 must NOT
+    # have one. Configurable per deployment rather than guessed from the model name.
+    TEI_QUERY_PREFIX: str = ""
+    TEI_PASSAGE_PREFIX: str = ""
 
     # --- LLM (advisory only — never a decision maker) -----------------------
     LLM_PROVIDER: str = "none"              # none | bedrock | gemini | openai | anthropic
