@@ -19,6 +19,8 @@ layer owns.
 from __future__ import annotations
 
 import uuid
+from collections import Counter
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Iterable, Optional, Sequence
 
@@ -40,6 +42,30 @@ logger = get_logger(__name__)
 # ``'simple'`` must match the generated column's regconfig in migration 0004. A mismatch would make
 # queries silently miss rows, so it is named once here rather than repeated as a literal.
 TS_CONFIG = "simple"
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingWrite:
+    """One vector to persist, as a value object.
+
+    A parameter object rather than a dozen keyword arguments because
+    :meth:`KnowledgeEmbeddingRepository.upsert_many` takes a *list* of these, and because it keeps
+    provenance fields Task 4 requires travelling together — a vector separated from its model
+    identity cannot be validated or invalidated later.
+    """
+
+    chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    vector: Sequence[float]
+    provider: str
+    model_name: str
+    version: str
+    spec_key: str
+    dimensions: int
+    latency_ms: Optional[int] = None
+    cost_usd: Optional[float] = None
+    input_tokens: Optional[int] = None
+    created_by_sub: Optional[str] = None
 
 
 class KnowledgeDocumentRepository(BaseRepository[KnowledgeDocument]):
@@ -414,6 +440,85 @@ class KnowledgeEmbeddingRepository(BaseRepository[KnowledgeEmbedding]):
         )
         return self.add(entity)
 
+    def upsert_many(self, writes: Sequence[EmbeddingWrite], *, tenant_id: str) -> int:
+        """Upsert a batch of vectors sharing one model version, in a fixed number of statements.
+
+        The per-chunk :meth:`upsert` issues a SELECT and then an INSERT or UPDATE for every vector,
+        which is fine for a single re-embed and wrong for ingestion: a 400-chunk policy document
+        would cost 800 round trips. This resolves the batch with one SELECT and lets the unit of
+        work flush the writes together.
+
+        Callers must pass one ``spec_key`` for the batch. Mixing versions is rejected rather than
+        handled, because the existing-row lookup is keyed on ``(chunk_id, spec_key)`` and a batch
+        spanning versions would need a second query to stay correct — a cost paid to support a call
+        that is always a caller bug.
+        """
+        if not writes:
+            return 0
+        spec_keys = {w.spec_key for w in writes}
+        if len(spec_keys) > 1:
+            raise ValueError(
+                f"upsert_many expects one spec_key per batch, received {sorted(spec_keys)}."
+            )
+        spec_key = spec_keys.pop()
+
+        chunk_ids = [w.chunk_id for w in writes]
+        if len(set(chunk_ids)) != len(chunk_ids):
+            # Guarded here too, not only by the vector store's own batch validation upstream: this
+            # method is public on the repository and callable directly (the ingestion pipeline will
+            # do exactly that in M8). Two writes for the same chunk that is not yet in `existing`
+            # both take the insert branch below and both attempt the same UNIQUE(chunk_id, spec_key)
+            # row, surfacing as a raw IntegrityError instead of a clear caller error.
+            counts = Counter(chunk_ids)
+            duplicates = sorted(str(cid) for cid, n in counts.items() if n > 1)
+            raise ValueError(
+                f"upsert_many must not repeat a chunk id within one batch; found "
+                f"{len(duplicates)} repeated: {duplicates[:20]}."
+            )
+        existing = {
+            row.chunk_id: row
+            for row in self.session.execute(
+                select(KnowledgeEmbedding).where(
+                    KnowledgeEmbedding.tenant_id == tenant_id,
+                    KnowledgeEmbedding.spec_key == spec_key,
+                    KnowledgeEmbedding.chunk_id.in_(chunk_ids),
+                )
+            ).scalars()
+        }
+
+        fresh: list[KnowledgeEmbedding] = []
+        for write in writes:
+            values = tuple(float(v) for v in write.vector)
+            entity = existing.get(write.chunk_id)
+            if entity is not None:
+                entity.embedding = values
+                entity.dimensions = write.dimensions
+                entity.latency_ms = write.latency_ms
+                entity.cost_usd = write.cost_usd
+                entity.input_tokens = write.input_tokens
+                continue
+            fresh.append(
+                KnowledgeEmbedding(
+                    tenant_id=tenant_id,
+                    chunk_id=write.chunk_id,
+                    document_id=write.document_id,
+                    embedding=values,
+                    embedding_provider=write.provider,
+                    embedding_model=write.model_name,
+                    embedding_version=write.version,
+                    spec_key=spec_key,
+                    dimensions=write.dimensions,
+                    latency_ms=write.latency_ms,
+                    cost_usd=write.cost_usd,
+                    input_tokens=write.input_tokens,
+                    created_by_sub=write.created_by_sub,
+                )
+            )
+        if fresh:
+            self.session.add_all(fresh)
+        self.session.flush()
+        return len(writes)
+
     def delete_for_document(
         self, document_id: uuid.UUID, *, tenant_id: str, spec_key: Optional[str] = None
     ) -> int:
@@ -577,6 +682,7 @@ def _effective_on(entity: Any, when: date):
 
 __all__ = [
     "DEFAULT_TENANT_ID",
+    "EmbeddingWrite",
     "KnowledgeChunkRepository",
     "KnowledgeDocumentRepository",
     "KnowledgeEmbeddingRepository",

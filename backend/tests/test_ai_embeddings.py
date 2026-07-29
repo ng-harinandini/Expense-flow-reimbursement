@@ -127,12 +127,26 @@ def test_cosine_distance_matches_the_pgvector_operator_convention() -> None:
 
 @pytest.mark.parametrize(
     ("distance", "expected"),
-    [(0.0, 1.0), (0.5, 0.5), (1.0, 0.0), (1.5, 0.25), (2.0, 0.0), (-0.001, 1.0), (2.5, 0.0)],
+    [(0.0, 1.0), (0.5, 0.5), (1.0, 0.0), (1.5, 0.0), (2.0, 0.0), (-0.001, 1.0), (2.5, 0.0)],
 )
 def test_similarity_from_distance_is_bounded(distance: float, expected: float) -> None:
     """Every adapter must return ``[0, 1]`` scores whatever its engine natively produces, including
     values marginally outside the theoretical range from an approximate index."""
     assert similarity_from_distance(distance) == pytest.approx(expected)
+
+
+def test_similarity_from_distance_never_rewards_a_further_vector() -> None:
+    """Monotone non-increasing, over the whole cosine range including negative similarity.
+
+    Load-bearing rather than a nicety: every adapter orders by the engine's ascending *distance* and
+    converts to a score afterwards, so a conversion with a bump in it would return results whose
+    scores contradict their own ordering. A previous implementation halved distances above 1.0 and
+    scored 1.5 higher than 1.0.
+    """
+    scores = [similarity_from_distance(d / 100.0) for d in range(201)]
+    assert all(
+        earlier >= later for earlier, later in zip(scores[:-1], scores[1:], strict=True)
+    ), "similarity must never increase as distance increases"
 
 
 def test_mean_vector_is_the_centroid() -> None:

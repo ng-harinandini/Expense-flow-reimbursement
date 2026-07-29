@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from sqlalchemy import cast
-from sqlalchemy.types import Float as FloatType, UserDefinedType
+from sqlalchemy import cast, literal
+from sqlalchemy.types import Float as FloatType, Text, UserDefinedType
 
 
 class Vector(UserDefinedType):
@@ -111,12 +111,18 @@ def vector_literal(values: Sequence[float]) -> str:
 
 
 def as_vector_param(values: Sequence[float], dimensions: int):
-    """A bound parameter cast to ``vector(n)``.
+    """A bound parameter cast to ``vector(n)``, for the query side of a similarity search.
 
-    Needed on the query side: a bare bound array reaches Postgres untyped, and ``<=>`` cannot pick
-    an operator without knowing both sides are vectors.
+    Needed because a bare bound array reaches PostgreSQL untyped and ``<=>`` cannot resolve an
+    without knowing both sides are vectors. The value travels as a *bound parameter*, never
+    interpolated into the SQL text.
+
+    The inner literal is explicitly typed ``Text``. Without that, SQLAlchemy infers the parameter's
+    type from the cast's target — ``Vector`` — and hands the already-rendered ``"[1.0,2.0]"`` string
+    to this type's own bind processor, which iterates it and tries to read ``"["`` as a float. The
+    rendering has happened by then; the parameter must not be processed a second time.
     """
-    return cast(vector_literal(values), Vector(dimensions))
+    return cast(literal(vector_literal(values), type_=Text), Vector(dimensions))
 
 
 __all__ = ["Vector", "as_vector_param", "vector_literal"]

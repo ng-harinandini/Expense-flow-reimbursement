@@ -96,12 +96,27 @@ def similarity_from_distance(distance: float) -> float:
     """Map a cosine distance to a ``[0, 1]`` similarity score.
 
     Every vector-store adapter must return scores on this scale regardless of what its engine
-    natively produces (see the ``VectorStore`` contract), so this is the shared conversion. Cosine
-    distance spans ``[0, 2]``, hence the halving; the result is clamped because an engine using an
-    approximate index can return a distance marginally outside the theoretical range.
+    natively produces (see the ``VectorStore`` contract), so this is the shared conversion.
+
+    ``1 - distance``, clamped — which is just the cosine similarity with negative values floored at
+    zero. Two properties this has to have, and one it deliberately gives up:
+
+    * **Monotone non-increasing in distance.** Adapters let the engine order by ascending distance
+      and convert afterwards, so any conversion that could rank a *further* vector higher would
+      reorder results relative to the ``ORDER BY`` that produced them. (An earlier version halved
+      distances above 1.0 and was not monotone: distance 1.0 scored 0.0 while 1.5 scored 0.25.)
+    * **Directly interpretable.** A score of 0.85 means a cosine similarity of 0.85, so a
+      ``score_threshold`` means the same thing to a caller as it does to anyone reading the model's
+      documentation. Rescaling ``[0, 2]`` onto ``[0, 1]`` would have made every threshold a number
+      only this codebase can explain, and would put unrelated text at 0.5.
+    * **Anti-correlated pairs all collapse to 0.** Cosine distances above 1.0 mean negative
+      similarity: definitively not a match. Their relative order carries nothing a retrieval caller
+      can use, and preserving it would cost the property above.
+
+    Clamped at both ends because an approximate index can return a distance marginally outside the
+    theoretical range.
     """
-    similarity = 1.0 - (float(distance) / 2.0) if distance > 1.0 else 1.0 - float(distance)
-    return max(0.0, min(1.0, similarity))
+    return max(0.0, min(1.0, 1.0 - float(distance)))
 
 
 def mean_vector(vectors: Sequence[Sequence[float]]) -> tuple[float, ...]:

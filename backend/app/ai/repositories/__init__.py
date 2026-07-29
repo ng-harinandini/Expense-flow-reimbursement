@@ -5,6 +5,7 @@ never commit, and every read is tenant-scoped.
 """
 
 from app.ai.repositories.knowledge_repository import (
+    EmbeddingWrite,
     KnowledgeChunkRepository,
     KnowledgeDocumentRepository,
     KnowledgeEmbeddingRepository,
@@ -12,6 +13,7 @@ from app.ai.repositories.knowledge_repository import (
 )
 
 __all__ = [
+    "EmbeddingWrite",
     "KnowledgeChunkRepository",
     "KnowledgeDocumentRepository",
     "KnowledgeEmbeddingRepository",
