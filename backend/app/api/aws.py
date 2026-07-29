@@ -1,9 +1,10 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from app.services.iam_refiner import DEFAULT_REFINED_IAM_POLICY_SPEC
+from app.core.deps import require_roles
 
 router = APIRouter(prefix="/aws", tags=["AWS Architecture Export"])
 
-@router.get("/export-code")
+@router.get("/export-code", dependencies=[Depends(require_roles("admin"))])
 def export_aws_code():
     python_handler = """# ExpenseFlow AWS Lambda - Policy Engine & OCR Handler
 import json

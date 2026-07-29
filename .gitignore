@@ -14,3 +14,16 @@ backend/.env
 # OS
 .DS_Store
 Thumbs.db
+# Recursive Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Workflow / project-management docs — kept local, intentionally NOT tracked or pushed
+/CLAUDE.md
+/HANDOFF.md
+/LOG.md
+/TASKS/
+/PLANS/
+/DECISIONS/
+/.claude/

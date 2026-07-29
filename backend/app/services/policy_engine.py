@@ -1,15 +1,32 @@
+"""Category policy evaluation.
+
+Unchanged rule logic — only its *input* changed in Phase 1: the ruleset now arrives as an argument
+sourced from the ``policy_rules`` table (``PolicyRuleService.rules_for_engine``) instead of being
+imported from a module-level Python list. Behaviour is intentionally identical; evaluating the new
+declarative ``conditions``/``actions`` payloads is a later phase.
+"""
+
 from datetime import datetime, date
-from typing import Dict, Any, List
-from app.services.store import policy_rules_store
+from typing import Any, Dict, List, Optional, Sequence
 
 GENERAL_POLICY_CONSTANTS = {
     "CLAIM_AGE_MAX_DAYS": 90,
     "DEFAULT_CURRENCY": "USD"
 }
 
-def evaluate_expense_policy(claim: Dict[str, Any]) -> Dict[str, Any]:
+def evaluate_expense_policy(
+    claim: Dict[str, Any],
+    policy_rules: Optional[Sequence[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Evaluate ``claim`` against ``policy_rules`` (the active, effective-dated ruleset).
+
+    ``policy_rules`` is the list of rule dictionaries produced by
+    ``app.services.mappers.policy_rules_to_engine_input``. When omitted, category defaults apply —
+    the same fallback the old module-level list provided for unknown categories.
+    """
+    rules: Sequence[Dict[str, Any]] = policy_rules or []
     checks: List[Dict[str, Any]] = []
-    
+
     category = claim.get("category") or "Misc / Other"
     amount_usd = float(claim.get("amountUSD") or claim.get("amount") or 0.0)
     grade = claim.get("employeeGrade") or "L1"
@@ -58,7 +75,7 @@ def evaluate_expense_policy(claim: Dict[str, Any]) -> Dict[str, Any]:
         })
 
     # Find matching policy rule definition
-    policy_def = next((r for r in policy_rules_store if r.get("category") == category), None)
+    policy_def = next((r for r in rules if r.get("category") == category), None)
 
     if category == "Meals":
         max_limit_allowed = 40.0
