@@ -227,6 +227,27 @@ export interface AuditLogEntry {
   ipAddress: string;
 }
 
+export type AuditActorType = 'human' | 'ai';
+
+/** One timeline entry within a claim's audit trail, shown when its row is expanded. */
+export interface AuditTrailEvent {
+  id: string;
+  timestamp: string; // ISO 8601
+  actor: string;
+  actorType: AuditActorType;
+  label: string; // e.g. 'Claim submitted'
+  detail: string; // e.g. 'Submitted' or 'Risk 5 · Auto Approved'
+}
+
+/** A claim's full audit trail, grouping every event logged against it, for the Audit Logs page. */
+export interface AuditTrailClaim {
+  id: string;
+  claimRef: string;
+  status: ClaimStatus;
+  riskScore?: number;
+  events: AuditTrailEvent[];
+}
+
 export interface IamPolicyRefinementRequest {
   currentPolicyJson: string;
   environmentName: string;
