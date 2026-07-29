@@ -848,6 +848,27 @@ def test_null_recorder_is_inert_but_usable_as_a_context_manager() -> None:
     assert recorder.snapshot()["enabled"] is False
 
 
+def test_null_recorder_still_nests_child_spans_under_their_parent() -> None:
+    """Regression: ``NullTelemetryRecorder.span()`` used to build a disconnected ``TimingSpan`` —
+    never reading or writing the ``_current_span`` ContextVar — so a child span opened while
+    "disabled" telemetry was in effect would time correctly on its own but never appear in its
+    parent's ``flatten()``/``timings()``. Anything that builds a span tree and reads it back from
+    the root (T004-M7's ``HybridRetrievalEngine.retrieve`` does exactly this to populate
+    ``RetrievalResult.timings``) silently lost every stage but the root whenever no real recorder
+    was wired up — which is the *default* construction for exactly that engine.
+    """
+    recorder = build_recorder(enabled=False)
+    with recorder.span(TelemetryOperation.RETRIEVE) as root:
+        with recorder.span(TelemetryOperation.LEXICAL_SEARCH):
+            pass
+        with recorder.span(TelemetryOperation.VECTOR_SEARCH):
+            pass
+
+    stages = {timing.stage for timing in root.timings()}
+    assert stages == {"RETRIEVE", "LEXICAL_SEARCH", "VECTOR_SEARCH"}
+    assert len(root.children) == 2
+
+
 # ---------------------------------------------------------------------------
 # ChunkingConfig: the validation that prevents an infinite chunking loop
 # ---------------------------------------------------------------------------

@@ -34,6 +34,28 @@ logger = get_logger(__name__)
 _current_span: ContextVar[Optional[TimingSpan]] = ContextVar("ai_current_span", default=None)
 
 
+def _open_span(
+    name: str, *, attributes: Optional[Mapping[str, Any]], owner: Optional["TelemetryRecorderImpl"]
+) -> "TimingSpan":
+    """Build a span nested under whatever is currently open, and make it the new current one.
+
+    The one piece of logic every recorder's ``span()`` must share: nesting is what lets
+    ``root.timings()`` see every descendant, and it has to work identically whether or not
+    aggregation (``owner``) is present. A recorder that skipped this — as ``NullTelemetryRecorder``
+    once did, passing ``_recorder=None`` straight to a disconnected ``TimingSpan`` — produces spans
+    that time correctly in isolation but vanish from every parent's ``flatten()``, silently emptying
+    ``RetrievalResult.timings`` for anyone who has telemetry disabled.
+    """
+    parent = _current_span.get()
+    span = TimingSpan(
+        operation=name, parent=parent, attributes=dict(attributes or {}), _recorder=owner
+    )
+    if parent is not None:
+        parent.children.append(span)
+    span._token = _current_span.set(span)
+    return span
+
+
 @dataclass
 class TimingSpan:
     """One timed stage. Mutable by design — a span accumulates as its body runs."""
@@ -194,17 +216,7 @@ class TelemetryRecorderImpl:
     ) -> TimingSpan:
         """Open a span, nested under whichever span is currently open."""
         name = operation.value if isinstance(operation, TelemetryOperation) else str(operation)
-        parent = _current_span.get()
-        span = TimingSpan(
-            operation=name,
-            parent=parent,
-            attributes=dict(attributes or {}),
-            _recorder=self if self._enabled else None,
-        )
-        if parent is not None:
-            parent.children.append(span)
-        span._token = _current_span.set(span)
-        return span
+        return _open_span(name, attributes=attributes, owner=self if self._enabled else None)
 
     def _close(self, span: TimingSpan) -> None:
         """Fold a finished span into the aggregates. Called from ``TimingSpan.__exit__``."""
@@ -297,8 +309,15 @@ class NullTelemetryRecorder:
 
     def span(self, operation: TelemetryOperation | str,
              *, attributes: Optional[Mapping[str, Any]] = None) -> TimingSpan:
+        """Open a span, nested exactly like ``TelemetryRecorderImpl.span`` — just never aggregated.
+
+        Nesting must still happen with telemetry "disabled": callers build a tree of spans (see
+        ``HybridRetrievalEngine``) and read it back via the root's own ``.timings()`` regardless of
+        whether a real recorder is wired up. Only the aggregation step (``_recorder=None``, so
+        ``TimingSpan.__exit__`` skips ``_close``) is actually skipped.
+        """
         name = operation.value if isinstance(operation, TelemetryOperation) else str(operation)
-        return TimingSpan(operation=name, attributes=dict(attributes or {}), _recorder=None)
+        return _open_span(name, attributes=attributes, owner=None)
 
     def record_metric(self, name: str, value: float,
                       *, attributes: Optional[Mapping[str, Any]] = None) -> None:

@@ -27,6 +27,7 @@ from typing import Any, Iterable, Optional, Sequence
 from sqlalchemy import Select, func, or_, select
 
 from app.ai.core.enums import DocumentStatus, IngestionStage, IngestionStatus
+from app.ai.core.types import MetadataFilter
 from app.ai.models.knowledge import (
     DEFAULT_TENANT_ID,
     KnowledgeChunk,
@@ -34,6 +35,7 @@ from app.ai.models.knowledge import (
     KnowledgeEmbedding,
     KnowledgeIngestionRun,
 )
+from app.ai.vector_store.filters import compile_to_sql
 from app.core.logging import get_logger
 from app.repositories.base import BaseRepository
 
@@ -109,6 +111,25 @@ class KnowledgeDocumentRepository(BaseRepository[KnowledgeDocument]):
             )
         ).scalar()
         return int(current or 0) + 1
+
+    def superseded_ids(self, *, tenant_id: str) -> frozenset[uuid.UUID]:
+        """Ids of every superseded document for this tenant.
+
+        The retrieval layer's document-level scoping needs this for the dense leg: a vector store
+        indexes chunks and has no notion of ``knowledge_documents.status`` at all (the filter DSL
+        refuses to accept it — see ``app/ai/vector_store/filters.py``), so excluding a superseded
+        document from a dense search means computing the exclusion here and passing it down as a
+        plain ``document_id nin [...]`` chunk filter, which every store *can* express. The lexical
+        leg does not need this: ``lexical_search``'s own ``include_superseded`` joins
+        ``knowledge_documents`` directly in SQL.
+        """
+        rows = self.session.execute(
+            select(KnowledgeDocument.id).where(
+                KnowledgeDocument.tenant_id == tenant_id,
+                KnowledgeDocument.status == DocumentStatus.SUPERSEDED,
+            )
+        ).scalars()
+        return frozenset(rows)
 
     def latest_for_title(self, title: str, *, tenant_id: str) -> Optional[KnowledgeDocument]:
         return self._one_or_none(
@@ -268,6 +289,7 @@ class KnowledgeChunkRepository(BaseRepository[KnowledgeChunk]):
         document_ids: Optional[Sequence[uuid.UUID]] = None,
         effective_on: Optional[date] = None,
         include_superseded: bool = False,
+        filters: Sequence[MetadataFilter] = (),
     ) -> list[tuple[KnowledgeChunk, float]]:
         """BM25-style ranking over the generated ``content_tsv`` column.
 
@@ -277,6 +299,15 @@ class KnowledgeChunkRepository(BaseRepository[KnowledgeChunk]):
 
         Filters are applied in the same ``WHERE`` clause as the match, so PostgreSQL restricts the
         candidate set *before* ranking — post-filtering would silently return fewer than ``limit``.
+
+        ``filters`` accepts the same store-agnostic ``MetadataFilter`` DSL the vector store adapters
+        use (:mod:`app.ai.vector_store.filters`), compiled with the identical ``compile_to_sql``.
+        Without it, a hybrid retrieval query filtering on, say, ``tags`` would apply correctly to
+        the dense leg (which speaks the full DSL) and be silently ignored by this leg (whose own
+        ``category``/``country``/``currency``/``source_type`` kwargs only cover a subset) — the two
+        legs would then disagree about which chunks are even eligible before either one scores
+        anything. The kwargs stay, for callers that only need the common cases without building a
+        filter list.
         """
         if not query or not query.strip():
             return []
@@ -301,18 +332,28 @@ class KnowledgeChunkRepository(BaseRepository[KnowledgeChunk]):
             effective_on=effective_on,
             include_superseded=include_superseded,
         )
+        for clause in compile_to_sql(filters, model=KnowledgeChunk):
+            stmt = stmt.where(clause)
         # Deterministic tie-break, so page 2 never repeats a row from page 1.
         stmt = stmt.order_by(rank.desc(), KnowledgeChunk.id).limit(limit)
 
         return [(row[0], float(row[1] or 0.0)) for row in self.session.execute(stmt).unique()]
 
     def trigram_search(
-        self, term: str, *, tenant_id: str, threshold: float = 0.3, limit: int = 20
+        self,
+        term: str,
+        *,
+        tenant_id: str,
+        threshold: float = 0.3,
+        limit: int = 20,
+        filters: Sequence[MetadataFilter] = (),
     ) -> list[tuple[KnowledgeChunk, float]]:
         """Fuzzy match via ``pg_trgm`` similarity — for OCR noise and vendor-name variants.
 
         Complements the lexical leg: full-text search cannot match ``"UBER *TRIP"`` to ``"Uber"``,
-        because tokenization has already separated them.
+        because tokenization has already separated them. The retrieval engine's lexical leg falls
+        back to this when ``lexical_search`` finds nothing, passing the same compiled filters so a
+        typo-tolerant retry does not widen what was eligible in the first place.
         """
         if not term or not term.strip():
             return []
@@ -323,9 +364,10 @@ class KnowledgeChunkRepository(BaseRepository[KnowledgeChunk]):
                 KnowledgeChunk.tenant_id == tenant_id,
                 similarity > threshold,
             )
-            .order_by(similarity.desc(), KnowledgeChunk.id)
-            .limit(limit)
         )
+        for clause in compile_to_sql(filters, model=KnowledgeChunk):
+            stmt = stmt.where(clause)
+        stmt = stmt.order_by(similarity.desc(), KnowledgeChunk.id).limit(limit)
         return [(row[0], float(row[1] or 0.0)) for row in self.session.execute(stmt).unique()]
 
     def _apply_filters(
