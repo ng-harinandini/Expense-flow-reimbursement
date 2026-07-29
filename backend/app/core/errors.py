@@ -43,6 +43,20 @@ STATUS_BY_ERROR: tuple[tuple[type[DomainError], int], ...] = (
 
 
 def status_for(error: DomainError) -> int:
+    """Resolve the HTTP status for a domain error.
+
+    An error class may **declare** its own status with a class-level ``http_status`` attribute,
+    which wins over the table below. That exists because this table's four bases cannot express
+    every case: the AI platform's provider failures need 502/503/504, and defaulting them to 400
+    would report an upstream outage as a client mistake.
+
+    Declaring the status on the class (rather than importing AI error types here) keeps the
+    dependency pointing one way — ``app.core`` never imports ``app.ai`` — and lets any future
+    module extend the mapping without editing this file or depending on import order.
+    """
+    declared = getattr(error, "http_status", None)
+    if isinstance(declared, int):
+        return declared
     for error_type, http_status in STATUS_BY_ERROR:
         if isinstance(error, error_type):
             return http_status
