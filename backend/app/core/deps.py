@@ -21,6 +21,9 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.ai.knowledge.service import KnowledgeService
+from app.ai.registry.flags import feature_flags
+from app.ai.services.composition import build_knowledge_service
 from app.core.database import get_db
 from app.core.security import TokenError, verify_id_token
 from app.core.unit_of_work import UnitOfWork
@@ -161,6 +164,25 @@ def get_ai_inference_repository(db: Session = Depends(get_db)) -> AIInferenceRep
 
 # --- service providers --------------------------------------------------------
 
+def get_knowledge_service(db: Session = Depends(get_db)) -> KnowledgeService:
+    """The AI platform's one public surface, bound to this request's session and transaction."""
+    return build_knowledge_service(db)
+
+
+def get_optional_decision_memory(
+    knowledge_service: KnowledgeService = Depends(get_knowledge_service),
+) -> Optional[KnowledgeService]:
+    """``ClaimService``'s decision-memory dependency, or ``None`` when the feature is off.
+
+    Deciding the flag here — not inside ``ClaimService`` — is what makes "disabling AI via feature
+    flag leaves the claim pipeline byte-identical to today" true: the service never even sees a
+    recorder to call when the flag is off, rather than seeing one and choosing not to use it.
+    """
+    if not feature_flags.is_enabled("ai.decision_memory"):
+        return None
+    return knowledge_service
+
+
 def get_audit_service(
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
 ) -> AuditService:
@@ -189,6 +211,7 @@ def get_claim_service(
     employee_service: EmployeeService = Depends(get_employee_service),
     policy_rule_service: PolicyRuleService = Depends(get_policy_rule_service),
     audit_service: AuditService = Depends(get_audit_service),
+    decision_memory: Optional[KnowledgeService] = Depends(get_optional_decision_memory),
 ) -> ClaimService:
     return ClaimService(
         claim_repository=claim_repository,
@@ -198,4 +221,5 @@ def get_claim_service(
         employee_service=employee_service,
         policy_rule_service=policy_rule_service,
         audit_service=audit_service,
+        decision_memory=decision_memory,
     )

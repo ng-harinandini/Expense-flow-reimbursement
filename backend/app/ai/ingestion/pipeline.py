@@ -173,6 +173,7 @@ def ingest_document(
     actor_sub: str | None = None,
     request_id: str | None = None,
     correlation_id: str | None = None,
+    manage_transaction: bool = True,
 ) -> IngestionResult:
     """Run one document through fetch, dedup, parse, normalize, classify, PII-scan, persist,
     chunk, embed and index — atomically, and fully audited in ``knowledge_ingestion_runs``.
@@ -180,6 +181,19 @@ def ingest_document(
     Every dependency below the document/run repositories is resolved to its configured default
     when not supplied, so a normal caller passes only ``source`` and ``session``; a test passes a
     stub ``embedding_service``/``vector_store`` to stay fast and offline.
+
+    ``manage_transaction`` (default ``True``) controls the two-phase commit described in the module
+    docstring. Set it to ``False`` when this call is a side effect *nested inside* a larger,
+    already-open transaction the caller owns (this is exactly what
+    :func:`app.ai.memory.indexer.record_decision` does) — every ``session.commit()``/
+    ``session.rollback()`` below is skipped, so this function's own success or failure becomes part
+    of the caller's transaction instead of ending it early. Concretely: without this, a decision
+    memory write nested inside ``ClaimService.submit_claim()`` would call ``session.commit()``
+    partway through that method, permanently committing the claim (and everything staged before it)
+    even if a later step in ``submit_claim()`` subsequently failed and the caller rolled back —
+    silently breaking that method's own "one whole transaction" promise. With
+    ``manage_transaction=False``, this function's failures simply propagate as exceptions and rely
+    on the *caller's* rollback to undo everything, including this call's own work.
     """
     s = settings or ai_settings
     meta = metadata or DocumentMetadataInput()
@@ -201,7 +215,10 @@ def ingest_document(
         source_uri=document.source_uri, file_name=document.file_name,
         actor_sub=actor_sub, request_id=request_id, correlation_id=correlation_id,
     )
-    session.commit()
+    if manage_transaction:
+        session.commit()
+    else:
+        session.flush()
 
     tracker = RunTracker(run_repo, run)
     tracker.stage_timings[IngestionStage.FETCH.value] = fetch_ms
@@ -217,7 +234,8 @@ def ingest_document(
                 run, status=IngestionStatus.SKIPPED_DUPLICATE, document_id=existing.id,
                 duration_ms=duration_ms, stage_timings=tracker.stage_timings,
             )
-            session.commit()
+            if manage_transaction:
+                session.commit()
             return IngestionResult(
                 status=IngestionStatus.SKIPPED_DUPLICATE, run_id=finished.id,
                 document_id=existing.id, document_version=existing.version,
@@ -371,13 +389,20 @@ def ingest_document(
             embedding_spec_key=service.spec_key, duration_ms=duration_ms,
             stage_timings=tracker.stage_timings,
         )
-        session.commit()
+        if manage_transaction:
+            session.commit()
         return IngestionResult(
             status=IngestionStatus.COMPLETED, run_id=finished.id, document_id=document_row.id,
             document_version=document_row.version, chunks_created=len(chunks), chunks_skipped=0,
             embeddings_created=len(writes), duration_ms=duration_ms,
         )
     except Exception as exc:
+        if not manage_transaction:
+            # Nothing to do here: the caller owns the transaction (see this function's own
+            # docstring) and is expected to have wrapped this call in its own savepoint/rollback
+            # boundary — attempting our own commit/rollback would either be a no-op racing the
+            # caller's or, worse, prematurely end a transaction the caller is still using.
+            raise
         session.rollback()
         duration_ms = int((time.monotonic() - overall_started) * 1000)
         run_repo.finish(

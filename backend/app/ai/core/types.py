@@ -419,6 +419,7 @@ class RetrievalResult:
     config_fingerprint: str
     timings: tuple[StageTiming, ...] = ()
     total_candidates: int = 0
+    truncated: bool = False
     cache_hit: bool = False
 
     @property

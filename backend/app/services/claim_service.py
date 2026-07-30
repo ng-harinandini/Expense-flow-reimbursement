@@ -22,8 +22,9 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Optional, Sequence
+from typing import Any, Optional, Protocol, Sequence, runtime_checkable
 
+from app.ai.core.enums import DecisionMemoryKind
 from app.core.logging import get_logger
 from app.domain import validators
 from app.domain.actor import Actor
@@ -67,6 +68,34 @@ DISBURSE_ROLES = frozenset({"finance", "admin"})
 #: How many peer claims to compare against during fraud screening.
 FRAUD_CORPUS_LIMIT = 200
 
+# Which decision-memory kind a claim's resulting status is recorded as, from the outer `action()`
+# hook. A status with no entry here is not recorded from there: Draft/Submitted/Processing are not
+# yet a "decision" worth remembering, and FLAGGED_FRAUD is deliberately absent because
+# `_record_manual_fraud_flag` already records that event itself, with a more precise summary —
+# including it here too would record the same FLAG_FRAUD action twice.
+_STATUS_TO_MEMORY_KIND: dict[ClaimStatus, DecisionMemoryKind] = {
+    ClaimStatus.MANAGER_REVIEW: DecisionMemoryKind.REVIEW,
+    ClaimStatus.FINANCE_REVIEW: DecisionMemoryKind.REVIEW,
+    ClaimStatus.AUTO_APPROVED: DecisionMemoryKind.APPROVAL,
+    ClaimStatus.APPROVED: DecisionMemoryKind.APPROVAL,
+    ClaimStatus.REIMBURSED: DecisionMemoryKind.APPROVAL,
+    ClaimStatus.REJECTED: DecisionMemoryKind.REJECTION,
+}
+
+
+@runtime_checkable
+class DecisionMemoryRecorder(Protocol):
+    """The one AI-platform capability ``ClaimService`` depends on: writing a lifecycle event into
+    decision memory. Deliberately narrower than the full ``KnowledgeService`` — this service has no
+    business retrieving anything, only recording what happened. See
+    ``app.ai.knowledge.service.KnowledgeService.record_decision``, which satisfies this shape.
+    """
+
+    def record_decision(
+        self, kind: DecisionMemoryKind, subject_id: object, summary: str, *, actor: Actor
+    ) -> None:
+        ...
+
 
 class ClaimService:
     """Business operations on claims. One instance per request (see ``app.core.deps``)."""
@@ -81,6 +110,7 @@ class ClaimService:
         employee_service: EmployeeService,
         policy_rule_service: PolicyRuleService,
         audit_service: AuditService,
+        decision_memory: Optional[DecisionMemoryRecorder] = None,
     ) -> None:
         self._claims = claim_repository
         self._fraud = fraud_repository
@@ -89,6 +119,26 @@ class ClaimService:
         self._employees = employee_service
         self._policies = policy_rule_service
         self._audit = audit_service
+        # None (the default, and what every existing caller/test still constructs with) means the
+        # claim pipeline is byte-identical to before this dependency existed — no capability is
+        # silently disabled here that was not disabled already by whoever chose not to wire one in.
+        self._decision_memory = decision_memory
+
+    def _remember(
+        self, kind: DecisionMemoryKind, subject_id: object, summary: str, *, actor: Actor
+    ) -> None:
+        """Best-effort decision-memory write. Never raises: a memory-indexing failure must not
+        fail the claim transaction it is merely observing."""
+        if self._decision_memory is None:
+            return
+        try:
+            self._decision_memory.record_decision(kind, subject_id, summary, actor=actor)
+        except Exception:
+            logger.warning(
+                "claim.decision_memory_write_failed",
+                extra={"subjectId": str(subject_id), "kind": kind.value},
+                exc_info=True,
+            )
 
     # --- reads ---------------------------------------------------------------
 
@@ -194,6 +244,13 @@ class ClaimService:
                 "amountUsd": str(claim.amount_usd),
                 "category": claim.category,
             },
+        )
+        self._remember(
+            DecisionMemoryKind.CLAIM, claim.id,
+            f"Claim {claim.claim_number}: {claim.currency} {claim.amount_usd:.2f} "
+            f"({claim.category}) from {claim.merchant_vendor}, submitted by {actor.name}. "
+            f"Routed to {claim.status.value}.",
+            actor=actor,
         )
         # History, comments, fraud result and workflow were inserted during this transaction;
         # expire so the serialized aggregate reflects all of them.
@@ -542,6 +599,19 @@ class ClaimService:
             before={"status": before_status.value},
             after={"status": claim.status.value, "claimId": str(claim.id)},
         )
+        memory_kind = _STATUS_TO_MEMORY_KIND.get(claim.status)
+        if memory_kind is not None:
+            # Deliberately excludes `notes`: decision memory has no role-based visibility
+            # filtering yet (see the same reasoning on the `add_comment` guard below), and a
+            # reviewer's free-text notes on an approval/rejection can carry exactly the kind of
+            # internal-only reasoning that guard exists to keep out of a broadly retrievable
+            # surface. Only structured, already-non-sensitive fields are recorded here.
+            summary = (
+                f"Claim {claim.claim_number} ({claim.category}, {claim.currency} "
+                f"{claim.amount_usd:.2f}): {normalized} executed by {actor.role}. Status "
+                f"{before_status.value} -> {claim.status.value}."
+            )
+            self._remember(memory_kind, claim.id, summary, actor=actor)
         logger.info(
             "claim.action_executed",
             extra={
@@ -623,6 +693,15 @@ class ClaimService:
             entity_id=claim.claim_number,
             details=notes or "Claim manually flagged for fraud investigation.",
         )
+        self._remember(
+            DecisionMemoryKind.FRAUD_FINDING, claim.id,
+            # Excludes `notes` for the same reason as the `action()` hook above: fraud rationale is
+            # exactly the kind of internal-only content decision memory should not broadly expose
+            # until it has role-based visibility filtering.
+            f"Claim {claim.claim_number} manually flagged for fraud investigation by "
+            f"{actor.name} ({actor.role}).",
+            actor=actor,
+        )
 
     # --- reviewer assignment -------------------------------------------------
 
@@ -693,6 +772,16 @@ class ClaimService:
             entity_id=claim.claim_number,
             details=f"Comment added to claim {claim.claim_number}.",
         )
+        if not is_internal:
+            # Internal-only comments are deliberately never remembered here: decision memory has
+            # no role-based visibility filtering yet (that is a future access-control feature, not
+            # part of T004), so recording one would make reviewer-only content retrievable by an
+            # employee through `retrieve_similar_claims`/`search`.
+            self._remember(
+                DecisionMemoryKind.COMMENT, claim.id,
+                f"Comment on claim {claim.claim_number} by {actor.name} ({actor.role}): {text}",
+                actor=actor,
+            )
         return self._claims.refresh(claim)
 
     # --- draft editing -------------------------------------------------------

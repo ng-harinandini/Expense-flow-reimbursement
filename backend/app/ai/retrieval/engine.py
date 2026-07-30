@@ -158,6 +158,7 @@ class HybridRetrievalEngine:
             config_fingerprint=fingerprint,
             timings=timings,
             total_candidates=len(lexical_chunks) + len(dense_chunks),
+            truncated=truncated,
             cache_hit=False,
         )
 
