@@ -70,6 +70,7 @@ def test_revision_chain_is_linear_and_ordered():
     script = ScriptDirectory.from_config(alembic_config())
     revisions = list(script.walk_revisions())
     assert [r.revision for r in revisions] == [
+        "0005_duplicate_detection",
         "0004_ai_knowledge_platform",
         "0003_seed_reference_data",
         "0002_phase1_core_domain",

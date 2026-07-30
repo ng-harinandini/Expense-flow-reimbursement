@@ -7,6 +7,6 @@ so the FastAPI-specific wiring stays thin.
 
 from __future__ import annotations
 
-from app.ai.services.composition import build_knowledge_service
+from app.ai.services.composition import build_duplicate_detection_service, build_knowledge_service
 
-__all__ = ["build_knowledge_service"]
+__all__ = ["build_duplicate_detection_service", "build_knowledge_service"]

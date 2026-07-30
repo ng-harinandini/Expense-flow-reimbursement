@@ -97,6 +97,33 @@ class DecisionMemoryRecorder(Protocol):
         ...
 
 
+@runtime_checkable
+class DuplicateDetectionRecorder(Protocol):
+    """The one AI-platform capability ``ClaimService`` depends on for duplicate detection: scanning
+    a newly submitted claim's identifying facts and recording its fingerprint for future scans to
+    compare against. Deliberately narrower than the full ``DuplicateDetectionService`` — this
+    service has no business resolving a vendor's document corpus, only scanning what it is given.
+    Every argument is a primitive or a stdlib type, never an AI-platform type, so this Protocol
+    (and therefore this whole module) never needs to import anything under ``app.ai`` beyond
+    ``app.ai.core.enums`` — see ``app.ai.duplicate_detection.service.DuplicateDetectionService.
+    scan_claim``, which satisfies this shape. The return value is read only via ``getattr`` for the
+    same reason: this module must never depend on ``DuplicateReport``'s concrete type.
+    """
+
+    def scan_claim(
+        self,
+        claim_id: object,
+        employee_id: object,
+        merchant_vendor: str,
+        expense_date: date,
+        amount_usd: Decimal,
+        currency: str,
+        *,
+        invoice_number: Optional[str] = None,
+    ) -> object:
+        ...
+
+
 class ClaimService:
     """Business operations on claims. One instance per request (see ``app.core.deps``)."""
 
@@ -111,6 +138,7 @@ class ClaimService:
         policy_rule_service: PolicyRuleService,
         audit_service: AuditService,
         decision_memory: Optional[DecisionMemoryRecorder] = None,
+        duplicate_detection: Optional[DuplicateDetectionRecorder] = None,
     ) -> None:
         self._claims = claim_repository
         self._fraud = fraud_repository
@@ -123,6 +151,7 @@ class ClaimService:
         # claim pipeline is byte-identical to before this dependency existed — no capability is
         # silently disabled here that was not disabled already by whoever chose not to wire one in.
         self._decision_memory = decision_memory
+        self._duplicate_detection = duplicate_detection
 
     def _remember(
         self, kind: DecisionMemoryKind, subject_id: object, summary: str, *, actor: Actor
@@ -138,6 +167,35 @@ class ClaimService:
                 "claim.decision_memory_write_failed",
                 extra={"subjectId": str(subject_id), "kind": kind.value},
                 exc_info=True,
+            )
+
+    def _scan_duplicates(self, claim: Claim) -> None:
+        """Best-effort advisory duplicate scan. Never raises: a duplicate-detection failure must
+        not fail the claim transaction it is merely observing, and its result can never change the
+        claim's status — the existing deterministic block in
+        ``ClaimRepository.find_duplicate_claims`` (see ``_build_draft``) is the only thing that can
+        refuse a resubmission. This only *logs* a flag for a human to weigh, catching patterns
+        (cross-employee, multi-receipt splits) that check structurally cannot see.
+        """
+        if self._duplicate_detection is None:
+            return
+        try:
+            report = self._duplicate_detection.scan_claim(
+                claim.id, claim.employee_id, claim.merchant_vendor, claim.expense_date,
+                claim.amount_usd, claim.currency,
+            )
+            verdict = getattr(getattr(report, "verdict", None), "value", None)
+            if verdict in ("LIKELY", "CONFIRMED"):
+                logger.warning(
+                    "claim.duplicate_scan_flagged",
+                    extra={
+                        "claimId": str(claim.id), "verdict": verdict,
+                        "score": getattr(report, "score", None),
+                    },
+                )
+        except Exception:
+            logger.warning(
+                "claim.duplicate_scan_failed", extra={"claimId": str(claim.id)}, exc_info=True
             )
 
     # --- reads ---------------------------------------------------------------
@@ -252,6 +310,7 @@ class ClaimService:
             f"Routed to {claim.status.value}.",
             actor=actor,
         )
+        self._scan_duplicates(claim)
         # History, comments, fraud result and workflow were inserted during this transaction;
         # expire so the serialized aggregate reflects all of them.
         return self._claims.refresh(claim)

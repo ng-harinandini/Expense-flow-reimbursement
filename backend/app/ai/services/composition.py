@@ -1,4 +1,5 @@
-"""Composition root for :class:`~app.ai.knowledge.service.KnowledgeService`.
+"""Composition roots for :class:`~app.ai.knowledge.service.KnowledgeService` and
+:class:`~app.ai.duplicate_detection.service.DuplicateDetectionService`.
 
 The one place that resolves an embedding provider, a vector store and (optionally) a reranker into
 a fully-wired service for one request's session — mirroring how
@@ -10,6 +11,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from app.ai.duplicate_detection.service import DuplicateDetectionService
 from app.ai.embeddings import EmbeddingService
 from app.ai.knowledge.service import KnowledgeService
 from app.ai.providers.embeddings import resolve_embedding_provider
@@ -37,4 +39,20 @@ def build_knowledge_service(session: Session, *, tenant_id: str = "default") -> 
     )
 
 
-__all__ = ["build_knowledge_service"]
+def build_duplicate_detection_service(
+    session: Session, *, tenant_id: str = "default"
+) -> DuplicateDetectionService:
+    """The fully-wired :class:`DuplicateDetectionService` for one request's session.
+
+    The embedding provider is shared with :func:`build_knowledge_service`'s resolution logic but
+    deliberately re-resolved rather than passed in: the two services are built independently per
+    request (see ``app/core/deps.py``), and duplicate detection's ``EMBEDDING_SIMILARITY`` signal is
+    the only thing here that needs it — every other signal is pure Python.
+    """
+    embedding_service = EmbeddingService(resolve_embedding_provider())
+    return DuplicateDetectionService(
+        session=session, tenant_id=tenant_id, embedding_service=embedding_service,
+    )
+
+
+__all__ = ["build_duplicate_detection_service", "build_knowledge_service"]

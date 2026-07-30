@@ -21,9 +21,10 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.ai.duplicate_detection.service import DuplicateDetectionService
 from app.ai.knowledge.service import KnowledgeService
 from app.ai.registry.flags import feature_flags
-from app.ai.services.composition import build_knowledge_service
+from app.ai.services.composition import build_duplicate_detection_service, build_knowledge_service
 from app.core.database import get_db
 from app.core.security import TokenError, verify_id_token
 from app.core.unit_of_work import UnitOfWork
@@ -183,6 +184,28 @@ def get_optional_decision_memory(
     return knowledge_service
 
 
+def get_duplicate_detection_service(
+    db: Session = Depends(get_db),
+) -> DuplicateDetectionService:
+    """Advisory duplicate scanning + vendor resolution, bound to this request's session."""
+    return build_duplicate_detection_service(db)
+
+
+def get_optional_duplicate_detection(
+    duplicate_detection_service: DuplicateDetectionService = Depends(
+        get_duplicate_detection_service
+    ),
+) -> Optional[DuplicateDetectionService]:
+    """``ClaimService``'s duplicate-scan dependency, or ``None`` when the feature is off.
+
+    Same reasoning as :func:`get_optional_decision_memory`: the flag is decided here, not inside
+    ``ClaimService``, so disabling it leaves the claim pipeline byte-identical to today.
+    """
+    if not feature_flags.is_enabled("ai.duplicate_detection"):
+        return None
+    return duplicate_detection_service
+
+
 def get_audit_service(
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
 ) -> AuditService:
@@ -212,6 +235,9 @@ def get_claim_service(
     policy_rule_service: PolicyRuleService = Depends(get_policy_rule_service),
     audit_service: AuditService = Depends(get_audit_service),
     decision_memory: Optional[KnowledgeService] = Depends(get_optional_decision_memory),
+    duplicate_detection: Optional[DuplicateDetectionService] = Depends(
+        get_optional_duplicate_detection
+    ),
 ) -> ClaimService:
     return ClaimService(
         claim_repository=claim_repository,
@@ -222,4 +248,5 @@ def get_claim_service(
         policy_rule_service=policy_rule_service,
         audit_service=audit_service,
         decision_memory=decision_memory,
+        duplicate_detection=duplicate_detection,
     )

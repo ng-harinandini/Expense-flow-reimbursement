@@ -5,6 +5,11 @@ it, or autogenerate will propose dropping these tables — the same rule ``app/m
 already documents for the domain models.
 """
 
+from app.ai.models.duplicate_detection import (  # noqa: F401
+    ClaimFingerprint,
+    VendorAlias,
+    VendorProfile,
+)
 from app.ai.models.knowledge import (  # noqa: F401
     DEFAULT_TENANT_ID,
     EMBEDDING_DIMENSIONS,
@@ -18,9 +23,12 @@ from app.ai.models.knowledge import (  # noqa: F401
 __all__ = [
     "DEFAULT_TENANT_ID",
     "EMBEDDING_DIMENSIONS",
+    "ClaimFingerprint",
     "KnowledgeChunk",
     "KnowledgeDocument",
     "KnowledgeEmbedding",
     "KnowledgeIngestionRun",
     "TenantMixin",
+    "VendorAlias",
+    "VendorProfile",
 ]

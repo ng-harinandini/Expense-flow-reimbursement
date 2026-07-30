@@ -1,8 +1,9 @@
 """Vendor intelligence retrieval: what the platform already knows about one vendor.
 
-A thin retrieval-query builder, not the duplicate-detection/vendor-matching engine itself (that is
-M10's job, built on top of this). Scoped to the two source types a vendor's own indexed knowledge
-would actually carry — a signed contract or a service manual — rather than every document type.
+A thin retrieval-query builder, not the duplicate-detection/vendor-matching engine itself
+(``app.ai.duplicate_detection``, built on top of the same vendor identity M9/M10 resolve). Scoped
+to the two source types a vendor's own indexed knowledge would actually carry — a signed contract
+or a service manual — rather than every document type.
 """
 
 from __future__ import annotations
