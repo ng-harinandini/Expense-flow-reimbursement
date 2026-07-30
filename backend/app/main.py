@@ -9,6 +9,11 @@ no route needs to translate a domain error into a status code itself.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.ai.api import admin as ai_admin_api
+from app.ai.api import duplicates as ai_duplicates_api
+from app.ai.api import health as ai_health_api
+from app.ai.api import knowledge as ai_knowledge_api
+from app.ai.api import search as ai_search_api
 from app.api import (
     admin_users,
     ai,
@@ -59,6 +64,11 @@ app.include_router(health.router, prefix=settings.API_PREFIX)
 app.include_router(receipts.router, prefix=settings.API_PREFIX)
 app.include_router(auth.router, prefix=settings.API_PREFIX)
 app.include_router(admin_users.router, prefix=settings.API_PREFIX)
+app.include_router(ai_knowledge_api.router, prefix=settings.API_PREFIX)
+app.include_router(ai_search_api.router, prefix=settings.API_PREFIX)
+app.include_router(ai_duplicates_api.router, prefix=settings.API_PREFIX)
+app.include_router(ai_admin_api.router, prefix=settings.API_PREFIX)
+app.include_router(ai_health_api.router, prefix=settings.API_PREFIX)
 
 
 logger.info(

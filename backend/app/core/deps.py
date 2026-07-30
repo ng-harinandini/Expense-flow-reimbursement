@@ -22,7 +22,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.ai.duplicate_detection.service import DuplicateDetectionService
+from app.ai.governance.feature_flags import PersistedFeatureFlagStore
 from app.ai.knowledge.service import KnowledgeService
+from app.ai.prompts.registry import PromptRegistry
 from app.ai.registry.flags import feature_flags
 from app.ai.services.composition import build_duplicate_detection_service, build_knowledge_service
 from app.core.database import get_db
@@ -210,6 +212,22 @@ def get_audit_service(
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
 ) -> AuditService:
     return AuditService(audit_repository)
+
+
+def get_prompt_registry(
+    db: Session = Depends(get_db),
+    audit_service: AuditService = Depends(get_audit_service),
+) -> PromptRegistry:
+    """The M13 admin router's caller for publishing/rolling back a prompt template."""
+    return PromptRegistry(db, audit_service=audit_service)
+
+
+def get_feature_flag_store(
+    db: Session = Depends(get_db),
+    audit_service: AuditService = Depends(get_audit_service),
+) -> PersistedFeatureFlagStore:
+    """The M13 admin router's caller for a durable, audited feature-flag override."""
+    return PersistedFeatureFlagStore(db, audit_service=audit_service)
 
 
 def get_employee_service(

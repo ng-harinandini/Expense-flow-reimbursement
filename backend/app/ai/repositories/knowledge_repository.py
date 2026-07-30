@@ -113,20 +113,24 @@ class KnowledgeDocumentRepository(BaseRepository[KnowledgeDocument]):
         return int(current or 0) + 1
 
     def superseded_ids(self, *, tenant_id: str) -> frozenset[uuid.UUID]:
-        """Ids of every superseded document for this tenant.
+        """Ids of every superseded or archived document for this tenant — every status the
+        default retrieval path must treat as unretrievable.
 
         The retrieval layer's document-level scoping needs this for the dense leg: a vector store
         indexes chunks and has no notion of ``knowledge_documents.status`` at all (the filter DSL
-        refuses to accept it — see ``app/ai/vector_store/filters.py``), so excluding a superseded
-        document from a dense search means computing the exclusion here and passing it down as a
-        plain ``document_id nin [...]`` chunk filter, which every store *can* express. The lexical
-        leg does not need this: ``lexical_search``'s own ``include_superseded`` joins
-        ``knowledge_documents`` directly in SQL.
+        refuses to accept it — see ``app/ai/vector_store/filters.py``), so excluding a
+        superseded/archived document from a dense search means computing the exclusion here and
+        passing it down as a plain ``document_id nin [...]`` chunk filter, which every store *can*
+        express. The lexical leg does not need this: ``lexical_search``'s own
+        ``include_superseded`` joins ``knowledge_documents`` directly in SQL (see
+        :meth:`KnowledgeChunkRepository._apply_filters`, which excludes the same two statuses).
         """
         rows = self.session.execute(
             select(KnowledgeDocument.id).where(
                 KnowledgeDocument.tenant_id == tenant_id,
-                KnowledgeDocument.status == DocumentStatus.SUPERSEDED,
+                KnowledgeDocument.status.in_(
+                    [DocumentStatus.SUPERSEDED, DocumentStatus.ARCHIVED]
+                ),
             )
         ).scalars()
         return frozenset(rows)
@@ -158,8 +162,14 @@ class KnowledgeDocumentRepository(BaseRepository[KnowledgeDocument]):
         if status is not None:
             stmt = stmt.where(KnowledgeDocument.status == status)
         elif not include_superseded:
-            # Superseded documents stay queryable, but only when asked for explicitly.
-            stmt = stmt.where(KnowledgeDocument.status != DocumentStatus.SUPERSEDED)
+            # Superseded and archived documents stay queryable, but only when asked for explicitly
+            # (the same flag covers both: an archived document is retired exactly like a superseded
+            # one from this listing's point of view).
+            stmt = stmt.where(
+                KnowledgeDocument.status.not_in(
+                    [DocumentStatus.SUPERSEDED, DocumentStatus.ARCHIVED]
+                )
+            )
         if source_type:
             stmt = stmt.where(KnowledgeDocument.source_type == source_type)
         if category:
@@ -181,6 +191,17 @@ class KnowledgeDocumentRepository(BaseRepository[KnowledgeDocument]):
 
     def mark_failed(self, document: KnowledgeDocument) -> KnowledgeDocument:
         document.status = DocumentStatus.FAILED
+        self.session.flush()
+        return document
+
+    def archive(self, document: KnowledgeDocument) -> KnowledgeDocument:
+        """Mark a document unretrievable without deleting it or its chunks/embeddings.
+
+        Never a hard delete (M13's ``DELETE /documents/{id}``): a claim decided under this
+        document's content must stay explainable, mirroring why :meth:`supersede` retires rather
+        than removes a superseded version.
+        """
+        document.status = DocumentStatus.ARCHIVED
         self.session.flush()
         return document
 
@@ -395,11 +416,15 @@ class KnowledgeChunkRepository(BaseRepository[KnowledgeChunk]):
         if effective_on is not None:
             stmt = stmt.where(_effective_on(KnowledgeChunk, effective_on))
         if not include_superseded:
-            # Join to the parent document so a retired policy's chunks drop out by default.
+            # Join to the parent document so a retired or archived policy's chunks drop out by
+            # default — the same two statuses `KnowledgeDocumentRepository.superseded_ids()`
+            # excludes from the dense leg, so the two legs cannot disagree about what is eligible.
             stmt = stmt.where(
                 KnowledgeChunk.document_id.in_(
                     select(KnowledgeDocument.id).where(
-                        KnowledgeDocument.status != DocumentStatus.SUPERSEDED
+                        KnowledgeDocument.status.not_in(
+                            [DocumentStatus.SUPERSEDED, DocumentStatus.ARCHIVED]
+                        )
                     )
                 )
             )

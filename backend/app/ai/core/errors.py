@@ -181,6 +181,26 @@ class ProviderTimeoutError(ProviderError):
         )
 
 
+class DocumentTooLargeError(AIValidationError):
+    """An uploaded document exceeds ``AISettings.MAX_DOCUMENT_BYTES``. Maps to **413**.
+
+    A plain ``AIValidationError`` (422) would tell a caller "this document is malformed," which is
+    wrong — the bytes might be perfectly valid content that is simply too big. 413 (Payload Too
+    Large) is the status a caller's retry logic can actually act on (compress/split the file rather
+    than blindly resubmitting the exact same request).
+    """
+
+    code = "document_too_large"
+    http_status = 413
+
+    def __init__(self, size_bytes: int, max_bytes: int) -> None:
+        super().__init__(
+            f"Document is {size_bytes} bytes, over the {max_bytes}-byte limit "
+            "(AI_MAX_DOCUMENT_BYTES).",
+            details={"sizeBytes": size_bytes, "maxBytes": max_bytes},
+        )
+
+
 class UnsupportedDocumentError(AIValidationError):
     """No registered parser handles this MIME type / extension."""
 
@@ -269,6 +289,7 @@ __all__ = [
     "AIValidationError",
     "DimensionMismatchError",
     "DocumentAlreadyIndexedError",
+    "DocumentTooLargeError",
     "EmbeddingVersionConflictError",
     "FeatureDisabledError",
     "KnowledgeNotFoundError",

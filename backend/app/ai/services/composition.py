@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.duplicate_detection.service import DuplicateDetectionService
 from app.ai.embeddings import EmbeddingService
+from app.ai.interfaces.vector_store import VectorStore
 from app.ai.knowledge.service import KnowledgeService
 from app.ai.providers.embeddings import resolve_embedding_provider
 from app.ai.providers.rerank import resolve_rerank_provider
@@ -21,10 +22,21 @@ from app.ai.reranking.service import RerankService
 from app.ai.vector_store.factory import resolve_vector_store
 
 
-def build_knowledge_service(session: Session, *, tenant_id: str = "default") -> KnowledgeService:
-    """The fully-wired :class:`KnowledgeService` for one request's session."""
+def build_ingestion_providers(session: Session) -> tuple[EmbeddingService, VectorStore]:
+    """Resolve the embedding provider and vector store shared by every ingestion call site.
+
+    :func:`build_knowledge_service` and the M13 upload/reindex routes (``app/ai/api/knowledge.py``)
+    both need this exact pair to call :func:`~app.ai.ingestion.pipeline.ingest_document`; pulled out
+    here so neither has to duplicate the two-line resolution.
+    """
     embedding_service = EmbeddingService(resolve_embedding_provider())
     vector_store = resolve_vector_store(session=session)
+    return embedding_service, vector_store
+
+
+def build_knowledge_service(session: Session, *, tenant_id: str = "default") -> KnowledgeService:
+    """The fully-wired :class:`KnowledgeService` for one request's session."""
+    embedding_service, vector_store = build_ingestion_providers(session)
 
     reranker: RerankService | None = None
     if feature_flags.is_enabled("ai.rerank"):
@@ -55,4 +67,8 @@ def build_duplicate_detection_service(
     )
 
 
-__all__ = ["build_duplicate_detection_service", "build_knowledge_service"]
+__all__ = [
+    "build_duplicate_detection_service",
+    "build_ingestion_providers",
+    "build_knowledge_service",
+]
