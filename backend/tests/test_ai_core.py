@@ -709,6 +709,20 @@ def test_pii_reject_kinds_parses_a_messy_list() -> None:
     assert settings.pii_reject_kinds == frozenset({"CREDIT_CARD", "NATIONAL_ID"})
 
 
+def test_pii_reject_kinds_is_not_stale_after_model_copy() -> None:
+    """Regression (found building T004-M8): this was a ``cached_property``, and pydantic's
+    ``model_copy`` copies ``__dict__`` verbatim — so once a singleton's ``pii_reject_kinds`` had
+    been read anywhere, every later ``model_copy(update={"PII_REJECT_KINDS": ...})`` would carry
+    over the stale cached value and silently ignore the override. Reproduced by reading the
+    property before copying, exactly as a caller doing ``settings or ai_settings`` elsewhere in the
+    codebase would."""
+    original = AISettings(PII_REJECT_KINDS="")
+    assert original.pii_reject_kinds == frozenset()  # read once, before the copy
+
+    updated = original.model_copy(update={"PII_REJECT_KINDS": "EMAIL"})
+    assert updated.pii_reject_kinds == frozenset({"EMAIL"})
+
+
 # ---------------------------------------------------------------------------
 # Cache
 # ---------------------------------------------------------------------------

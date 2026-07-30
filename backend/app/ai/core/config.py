@@ -18,7 +18,6 @@ surfaces as :class:`~app.ai.core.errors.ProviderNotConfiguredError` (503) at the
 
 from __future__ import annotations
 
-from functools import cached_property
 from typing import Literal, Optional
 
 from pydantic import computed_field, field_validator
@@ -237,8 +236,14 @@ class AISettings(BaseSettings):
         """The version string stored beside every vector, e.g. ``bge_m3_onnx/BAAI/bge-m3@v1``."""
         return f"{self.EMBEDDING_PROVIDER}/{self.EMBEDDING_MODEL}@{self.EMBEDDING_VERSION}"
 
-    @cached_property
+    @property
     def pii_reject_kinds(self) -> frozenset[str]:
+        """Deliberately a plain ``property``, not ``cached_property``: pydantic's ``model_copy``
+        copies ``__dict__`` verbatim, so a cached value computed once on this singleton would be
+        copied into every later ``model_copy(update={"PII_REJECT_KINDS": ...})`` and returned
+        unchanged regardless of the new value — silently ignoring the override. Splitting a short
+        comma-separated string is cheap enough that caching it was never worth that risk.
+        """
         return frozenset(
             part.strip().upper() for part in self.PII_REJECT_KINDS.split(",") if part.strip()
         )
