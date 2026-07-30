@@ -30,7 +30,7 @@ import logging
 import math
 import uuid
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Iterable, Optional, Sequence
 
 import pytest
@@ -64,6 +64,7 @@ from app.ai.vector_store.filters import (
     matches,
     normalize_filter,
     normalize_filters,
+    sql_where,
 )
 from app.ai.vector_store.memory import InMemoryVectorStore
 from app.ai.vector_store.pgvector import PgVectorStore
@@ -700,6 +701,57 @@ def test_the_equivalence_cases_are_not_all_vacuous() -> None:
     assert not empty, f"these equivalence cases match nothing and test nothing: {empty}"
 
 
+def test_delete_by_document_only_touches_its_own_tenants_bucket() -> None:
+    """Two tenants share one process-wide store; deleting one tenant's document must never even
+    look at, let alone remove, a same-id document belonging to the other."""
+    corpus_a = Corpus()
+    corpus_b = Corpus()
+    store = InMemoryVectorStore(dimensions=EMBEDDING_DIMENSIONS)
+    store.upsert(corpus_a.embedded(), tenant_id="tenant-a")
+    store.upsert(corpus_b.embedded(), tenant_id="tenant-b")
+
+    removed = store.delete_by_document(corpus_a.document_id, tenant_id="tenant-a")
+
+    assert removed == len(corpus_a.chunks)
+    assert store.count(tenant_id="tenant-b") == len(corpus_b.chunks)
+
+
+@pytest.mark.parametrize(
+    "metric", [DistanceMetric.EUCLIDEAN, DistanceMetric.INNER_PRODUCT, DistanceMetric.COSINE]
+)
+def test_memory_store_search_works_under_every_distance_metric(metric: DistanceMetric) -> None:
+    corpus = Corpus()
+    store = InMemoryVectorStore(dimensions=EMBEDDING_DIMENSIONS, metric=metric)
+    store.upsert(corpus.embedded(), tenant_id=TENANT)
+    hits = store.search(as_embedding(query_vector()), top_k=10, tenant_id=TENANT)
+    assert hits
+
+
+def test_memory_store_records_a_search_span_when_a_recorder_is_wired_up() -> None:
+    from app.ai.telemetry import build_recorder
+
+    corpus = Corpus()
+    recorder = build_recorder(enabled=True)
+    store = InMemoryVectorStore(dimensions=EMBEDDING_DIMENSIONS, recorder=recorder)
+    store.upsert(corpus.embedded(), tenant_id=TENANT)
+    store.search(as_embedding(query_vector()), top_k=10, tenant_id=TENANT)
+    assert recorder.snapshot()["operations"]["VECTOR_SEARCH"]["count"] == 1
+
+
+def test_delete_by_document_accepts_a_document_id_as_a_string() -> None:
+    corpus = Corpus()
+    store = InMemoryVectorStore(dimensions=EMBEDDING_DIMENSIONS)
+    store.upsert(corpus.embedded(), tenant_id=TENANT)
+    removed = store.delete_by_document(str(corpus.document_id), tenant_id=TENANT)
+    assert removed == len(corpus.chunks)
+
+
+def test_delete_by_document_rejects_a_malformed_id() -> None:
+    store = InMemoryVectorStore(dimensions=EMBEDDING_DIMENSIONS)
+    with pytest.raises(ValueError, match="not a valid UUID"):
+        store.delete_by_document("not-a-uuid", tenant_id=TENANT)
+
+
 # ===========================================================================
 # the filter DSL
 # ===========================================================================
@@ -847,6 +899,59 @@ def test_python_filter_treats_a_nested_json_container_as_absent() -> None:
     )
     assert not matches(chunk, [MetadataFilter("extra.nested", "eq", "anything")])
     assert matches(chunk, [MetadataFilter("extra.flag", "eq", "true")])
+
+
+def test_a_filter_must_name_a_field() -> None:
+    with pytest.raises(FilterError, match="must name a field"):
+        normalize_filter(MetadataFilter("", "eq", "x"))
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [("true", True), ("1", True), ("yes", True), ("false", False), ("0", False), ("no", False)],
+)
+def test_exists_coerces_every_documented_string_spelling(given: str, expected: bool) -> None:
+    assert normalize_filter(MetadataFilter("country", "exists", given)).value is expected
+
+
+def test_exists_rejects_an_unrecognized_string() -> None:
+    with pytest.raises(FilterError, match="'exists' expects a boolean"):
+        normalize_filter(MetadataFilter("country", "exists", "maybe"))
+
+
+def test_an_int_field_refuses_a_bool_value() -> None:
+    """``bool`` is an ``int`` subclass in Python; accepting it would silently coerce ``True`` to 1
+    for a filter that means something else entirely (a page number, a version)."""
+    with pytest.raises(FilterError, match="'page_number' expects int"):
+        normalize_filter(MetadataFilter("page_number", "eq", True))
+
+
+def test_a_date_field_accepts_a_datetime_by_taking_its_date_part() -> None:
+    when = datetime(2026, 3, 1, 12, 30, tzinfo=timezone.utc)
+    assert normalize_filter(
+        MetadataFilter("effective_date", "eq", when)
+    ).value == date(2026, 3, 1)
+
+
+def test_sql_where_is_none_for_an_empty_filter_list() -> None:
+    assert sql_where([]) is None
+
+
+def test_sql_where_ands_every_clause() -> None:
+    clause = sql_where([MetadataFilter("country", "eq", "DE")])
+    assert clause is not None
+
+
+@pytest.mark.parametrize(
+    ("op", "threshold", "expected"),
+    [("gt", 3, True), ("gte", 5, True), ("lt", 10, True), ("lte", 5, True)],
+)
+def test_python_filter_orders_numeric_comparisons(op: str, threshold: int, expected: bool) -> None:
+    chunk = Chunk(
+        id=uuid.uuid4(), text="x", index=0,
+        metadata=ChunkMetadata(page_number=5, tenant_id=TENANT),
+    )
+    assert matches(chunk, [MetadataFilter("page_number", op, threshold)]) is expected
 
 
 # ===========================================================================
@@ -1065,6 +1170,24 @@ def test_recall_against_an_empty_corpus_is_total(db_session: Session) -> None:
     assert exact.recall_against([], as_embedding(query_vector()), top_k=3) == 1.0
 
 
+def test_postgres_native_rejects_a_non_positive_max_candidates() -> None:
+    with pytest.raises(AIValidationError, match="max_candidates must be >= 1"):
+        PostgresNativeVectorStore(dimensions=EMBEDDING_DIMENSIONS, max_candidates=0)
+
+
+@pytest.mark.parametrize(
+    "metric", [DistanceMetric.EUCLIDEAN, DistanceMetric.INNER_PRODUCT, DistanceMetric.COSINE]
+)
+def test_postgres_native_search_works_under_every_distance_metric(
+    db_session: Session, persisted_corpus: Corpus, metric: DistanceMetric
+) -> None:
+    store = PostgresNativeVectorStore(dimensions=EMBEDDING_DIMENSIONS, metric=metric)
+    store = store.bind(db_session)
+    store.upsert(persisted_corpus.embedded(), tenant_id=TENANT)
+    hits = store.search(as_embedding(query_vector()), top_k=3, tenant_id=TENANT)
+    assert hits
+
+
 def test_pgvector_warns_when_the_metric_cannot_use_the_index() -> None:
     """A silent sequential scan at scale is worse than a warning nobody reads."""
     with captured_logs("app.ai.vector_store.pgvector") as records:
@@ -1094,6 +1217,35 @@ def test_pgvector_clamps_ef_search_at_the_engine_ceiling_instead_of_failing_the_
 
     assert hits == []  # the corpus has 4 rows; a page this deep is simply empty, not an error
     assert any("ef_search_clamped" in r.getMessage() for r in records)
+
+
+def test_pgvector_store_verify_extension_does_not_raise(db_session: Session) -> None:
+    PgVectorStore(dimensions=EMBEDDING_DIMENSIONS).bind(db_session).verify_extension()
+
+
+@pytest.mark.parametrize(
+    ("metric", "threshold"),
+    [
+        (DistanceMetric.INNER_PRODUCT, 0.5),
+        (DistanceMetric.EUCLIDEAN, 0.5),
+        (DistanceMetric.COSINE, 0.0),
+    ],
+)
+def test_pgvector_search_works_under_every_metric_and_a_real_threshold(
+    db_session: Session, persisted_corpus: Corpus, metric: DistanceMetric, threshold: float
+) -> None:
+    """Exercises each metric's own distance-bound formula (the inverse of
+    ``score_from_distance``), not only the default, unbounded cosine path most other tests use."""
+    from app.ai.telemetry import build_recorder
+
+    recorder = build_recorder(enabled=True)
+    store = PgVectorStore(dimensions=EMBEDDING_DIMENSIONS, metric=metric, recorder=recorder)
+    store = store.bind(db_session)
+    store.upsert(persisted_corpus.embedded(), tenant_id=TENANT)
+    store.search(
+        as_embedding(query_vector()), top_k=3, tenant_id=TENANT, score_threshold=threshold
+    )
+    assert recorder.snapshot()["operations"]["VECTOR_SEARCH"]["count"] == 1
 
 
 def test_a_dimensionality_above_the_engine_limit_is_caught_at_construction() -> None:
@@ -1241,6 +1393,29 @@ def test_an_unconfigured_external_store_is_a_configuration_error(clean_registry)
     with pytest.raises(ProviderNotConfiguredError) as caught:
         resolve_vector_store(name="qdrant")
     assert "AI_QDRANT_URL" in caught.value.details["remedy"]
+
+
+@pytest.mark.parametrize(
+    "name, remedy_substring",
+    [
+        ("opensearch", "AI_OPENSEARCH_URL"),
+        ("pinecone", "AI_PINECONE_API_KEY"),
+        ("milvus", "AI_MILVUS_URI"),
+        ("weaviate", "AI_WEAVIATE_URL"),
+    ],
+)
+def test_every_unconfigured_external_store_is_a_configuration_error(
+    clean_registry, name: str, remedy_substring: str
+) -> None:
+    """Same guarantee as the qdrant case above, for the other four external adapters — each
+    factory lambda in ``app/ai/vector_store/factory.py`` must reach its adapter's own
+    configuration check rather than failing earlier (an ``ImportError``) or later (a ``None``
+    client used three frames into a search)."""
+    from app.ai.vector_store.factory import resolve_vector_store
+
+    with pytest.raises(ProviderNotConfiguredError) as caught:
+        resolve_vector_store(name=name)
+    assert remedy_substring in caught.value.details["remedy"]
 
 
 def test_there_is_no_silent_fallback_to_the_memory_store(clean_registry) -> None:
@@ -1741,6 +1916,45 @@ def test_a_query_vector_reaches_postgres_as_a_typed_bound_parameter(db_session: 
     # handing back a one-element tuple.
     distance = db_session.execute(select(left.cosine_distance(right))).scalar_one()
     assert float(distance) == pytest.approx(1.0)
+
+
+def test_l2_and_negative_inner_product_comparators_round_trip(db_session: Session) -> None:
+    """The other two of the three pgvector distance operators, exercised the same way as the
+    cosine one above."""
+    from sqlalchemy import select
+
+    from app.ai.vector_store.pg_types import as_vector_param
+
+    left = as_vector_param([1.0, 0.0, 0.0], 3)
+    right = as_vector_param([0.0, 1.0, 0.0], 3)
+    l2 = db_session.execute(select(left.l2_distance(right))).scalar_one()
+    assert float(l2) == pytest.approx(math.sqrt(2.0))
+    inner = db_session.execute(select(left.negative_inner_product(right))).scalar_one()
+    assert float(inner) == pytest.approx(0.0)
+
+
+def test_vector_type_rejects_a_non_positive_dimension() -> None:
+    from app.ai.vector_store.pg_types import Vector
+
+    with pytest.raises(ValueError, match="must be >= 1"):
+        Vector(0)
+
+
+def test_vector_result_processor_accepts_a_list_or_tuple_directly() -> None:
+    """Defensive branch: most reads see pgvector's text wire form, but a driver or test stub that
+    already deserialized to a Python sequence must round-trip unchanged."""
+    from app.ai.vector_store.pg_types import Vector
+
+    process = Vector(3).result_processor(None, None)
+    assert process([1, 2, 3]) == (1.0, 2.0, 3.0)
+    assert process((1, 2, 3)) == (1.0, 2.0, 3.0)
+
+
+def test_vector_result_processor_handles_the_empty_vector_literal() -> None:
+    from app.ai.vector_store.pg_types import Vector
+
+    process = Vector(3).result_processor(None, None)
+    assert process("[]") == ()
 
 
 def test_the_vector_extension_is_present_in_this_database(db_session: Session) -> None:

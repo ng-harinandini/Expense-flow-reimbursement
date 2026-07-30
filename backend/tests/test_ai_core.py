@@ -70,7 +70,12 @@ from app.ai.interfaces.vector_store import VectorMatch, VectorStoreCapabilities
 from app.ai.providers.cache import MemoryCache, NullCache, register_cache_providers
 from app.ai.registry.flags import FeatureFlags
 from app.ai.registry.registry import ComponentRegistry, cache_registry
-from app.ai.telemetry import build_recorder
+from app.ai.telemetry import (
+    NullTelemetryRecorder,
+    TelemetryRecorderImpl,
+    build_recorder,
+    current_span,
+)
 from app.core.errors import status_for
 
 
@@ -557,6 +562,71 @@ def test_describe_reports_availability_for_already_built_components(
     assert row["available"] is True
 
 
+def test_registry_kind_property_reports_its_own_kind(registry: ComponentRegistry) -> None:
+    assert registry.kind == ProviderKind.EMBEDDING
+
+
+def test_registry_rejects_registering_a_blank_name(registry: ComponentRegistry) -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        registry.register("   ", _Good, protocol=_Sample)
+
+
+def test_safe_available_is_none_for_an_unregistered_name(registry: ComponentRegistry) -> None:
+    """``describe()``/probing never raises for a name that was never registered at all."""
+    assert registry._safe_available("nope") is None
+
+
+def test_safe_available_catches_a_raising_is_available(registry: ComponentRegistry) -> None:
+    """A broken adapter's ``is_available()`` must not break introspection — see the module's own
+    'Availability-aware fallback' guarantee."""
+    class _Broken:
+        name = "broken"
+
+        def is_available(self) -> bool:
+            raise RuntimeError("boom")
+
+    registry.register("broken", _Broken, protocol=_Sample)
+    assert registry._safe_available("broken", construct=True) is False
+
+
+def test_fallback_skips_a_preference_whose_construction_is_not_configured(
+    registry: ComponentRegistry,
+) -> None:
+    """A registered-but-unconfigured preference (its own factory raises
+    ``ProviderNotConfiguredError``, exactly like an external vector-store adapter with no URL set)
+    must be skipped in favour of the next preference, not propagate."""
+    def unconfigured() -> object:
+        raise ProviderNotConfiguredError(provider="primary", kind="EMBEDDING", remedy="set it")
+
+    registry.register("primary", unconfigured, protocol=_Sample)
+    registry.register("backup", lambda: _Good(available=True), protocol=_Sample)
+    assert registry.resolve_with_fallback(["primary", "backup"]).is_available()
+
+
+def test_fallback_skips_a_preference_whose_is_available_raises(
+    registry: ComponentRegistry,
+) -> None:
+    """Distinct from the construction-failure case above: the component builds fine, but calling
+    its own ``is_available()`` blows up — the fallback loop must still move on."""
+    class _RaisesOnAvailabilityCheck:
+        name = "flaky"
+
+        def is_available(self) -> bool:
+            raise RuntimeError("network blip")
+
+    registry.register("primary", _RaisesOnAvailabilityCheck, protocol=_Sample)
+    registry.register("backup", lambda: _Good(available=True), protocol=_Sample)
+    assert registry.resolve_with_fallback(["primary", "backup"]).is_available()
+
+
+def test_registry_snapshot_reports_every_registry_by_kind() -> None:
+    from app.ai.registry.registry import ALL_REGISTRIES, registry_snapshot
+
+    snapshot = registry_snapshot()
+    assert set(snapshot) == {registry.kind.value for registry in ALL_REGISTRIES}
+    assert all(isinstance(rows, list) for rows in snapshot.values())
+
+
 def test_describe_can_probe_on_request(registry: ComponentRegistry) -> None:
     registry.register("a", _Good, protocol=_Sample)
     assert registry.describe(probe=True)[0]["available"] is True
@@ -881,6 +951,54 @@ def test_null_recorder_still_nests_child_spans_under_their_parent() -> None:
     stages = {timing.stage for timing in root.timings()}
     assert stages == {"RETRIEVE", "LEXICAL_SEARCH", "VECTOR_SEARCH"}
     assert len(root.children) == 2
+
+
+def test_a_slow_span_is_logged_as_a_warning() -> None:
+    """The usual first symptom of a misconfigured provider or a cold model, made visible."""
+    recorder = TelemetryRecorderImpl(enabled=True, slow_operation_ms=0)
+    with recorder.span(TelemetryOperation.EMBED):
+        pass
+    assert recorder.snapshot()["operations"]["EMBED"]["count"] == 1
+
+
+def test_record_metric_with_attributes_does_not_raise() -> None:
+    recorder = build_recorder(enabled=True)
+    recorder.record_metric("cache_hit_rate", 0.5, attributes={"tier": "hot"})
+
+
+def test_recorder_reset_clears_operations_counters_and_gauges() -> None:
+    recorder = TelemetryRecorderImpl(enabled=True)
+    with recorder.span(TelemetryOperation.EMBED):
+        pass
+    recorder.increment("tokens", 10)
+    recorder.record_metric("g", 1.0)
+    recorder.reset()
+    snapshot = recorder.snapshot()
+    assert snapshot["operations"] == {}
+    assert snapshot["counters"] == {}
+    assert snapshot["gauges"] == {}
+
+
+def test_null_recorder_every_method_is_a_documented_no_op() -> None:
+    recorder = NullTelemetryRecorder()
+    assert recorder.record_metric("x", 1.0, attributes={"a": 1}) is None
+    assert recorder.increment("x", 2) is None
+    assert recorder.reset() is None
+    assert recorder.snapshot() == {"enabled": False, "operations": {}, "counters": {}, "gauges": {}}
+
+
+def test_current_span_is_none_outside_any_span() -> None:
+    assert current_span() is None
+
+
+def test_timing_span_to_dict_reports_the_whole_subtree() -> None:
+    recorder = build_recorder(enabled=True)
+    with recorder.span(TelemetryOperation.RETRIEVE) as root:
+        with recorder.span(TelemetryOperation.EMBED):
+            pass
+    payload = root.to_dict()
+    assert payload["operation"] == "RETRIEVE"
+    assert payload["children"][0]["operation"] == "EMBED"
 
 
 # ---------------------------------------------------------------------------

@@ -88,6 +88,53 @@ def test_knowledge_document_round_trip(client: TestClient) -> None:
     assert not any(d["id"] == new_document_id for d in listed_after_archive.json())
 
 
+def test_upload_rejects_an_empty_file(client: TestClient) -> None:
+    as_role("finance")
+    response = client.post(
+        f"{PREFIX}/knowledge/documents",
+        files={"file": ("empty.txt", b"", "text/plain")},
+    )
+    assert response.status_code == 400
+
+
+def test_upload_rejects_an_unknown_source_type(client: TestClient) -> None:
+    as_role("finance")
+    response = client.post(
+        f"{PREFIX}/knowledge/documents",
+        files={"file": ("doc.txt", POLICY_TEXT.encode("utf-8"), "text/plain")},
+        data={"sourceType": "NOT_A_REAL_SOURCE_TYPE"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("GET", "/knowledge/documents/{id}"),
+        ("POST", "/knowledge/documents/{id}/reindex"),
+        ("DELETE", "/knowledge/documents/{id}"),
+    ],
+)
+def test_document_lifecycle_endpoints_404_on_an_unknown_id(
+    client: TestClient, method: str, path: str
+) -> None:
+    as_role("finance")
+    response = client.request(method, f"{PREFIX}{path.format(id=uuid.uuid4())}")
+    assert response.status_code == 404
+
+
+def test_context_retrieval_supports_similar_claims_and_vendor_kinds(client: TestClient) -> None:
+    """The round-trip test above only exercises ``kind: policy``; the other two documented kinds
+    need their own coverage."""
+    as_role("employee")
+    for kind in ("similar_claims", "vendor"):
+        response = client.post(
+            f"{PREFIX}/knowledge/context", json={"kind": kind, "query": "test query"}
+        )
+        assert response.status_code == 200, response.text
+        assert "chunkCount" in response.json()
+
+
 def test_archived_document_is_excluded_from_search_and_context(client: TestClient) -> None:
     """Regression test: archiving must make a document's content unretrievable everywhere, not
     only absent from the document list. Both retrieval legs
