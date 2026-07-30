@@ -32,5 +32,15 @@ fastembed>=0.8.0
 # there is no Python package to declare. The SQLAlchemy column type is hand-rolled in
 # app/ai/vector_store/pg_types.py.
 
+# Document parsing (T004-M3): one small, pure/near-pure-Python library per format family. Each
+# parser still guards its import and reports is_available()=False without it (DocumentParser
+# contract clause 3), so a host missing one of these loses only that format, never the platform's
+# ability to boot. lxml arrives transitively via python-docx; beautifulsoup4 uses the stdlib
+# html.parser backend regardless, so its own availability does not depend on lxml being present.
+pypdf>=6.0               # PDF text-layer extraction
+python-docx>=1.2.0       # Word (.docx)
+openpyxl>=3.1.0          # Excel (.xlsx)
+beautifulsoup4>=4.15.0   # HTML
+
 # Optional extras, all guarded at their import sites and never required by the default path:
 #   redis>=5.0        AI_CACHE_BACKEND=redis (a cache shared across workers)

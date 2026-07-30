@@ -163,6 +163,7 @@ class AISettings(BaseSettings):
 
     # --- parsing / PII (Task 2) ---------------------------------------------
     OCR_PROVIDER: str = "textract"          # reuses T001's textract_service, fallback included
+    OCR_REGION: Optional[str] = None        # None => boto3's own default-region resolution
     PII_DETECTION_ENABLED: bool = True
     PII_REDACTION_MODE: RedactionMode = RedactionMode.TAG
     PII_REJECT_KINDS: str = ""              # comma-separated PIIKind values to refuse outright
