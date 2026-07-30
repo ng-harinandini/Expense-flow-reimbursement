@@ -10,6 +10,7 @@ from app.ai.models.duplicate_detection import (  # noqa: F401
     VendorAlias,
     VendorProfile,
 )
+from app.ai.models.governance import FlagOverride, RegistryEntry  # noqa: F401
 from app.ai.models.knowledge import (  # noqa: F401
     DEFAULT_TENANT_ID,
     EMBEDDING_DIMENSIONS,
@@ -19,15 +20,19 @@ from app.ai.models.knowledge import (  # noqa: F401
     KnowledgeIngestionRun,
     TenantMixin,
 )
+from app.ai.models.prompt import PromptTemplate  # noqa: F401
 
 __all__ = [
     "DEFAULT_TENANT_ID",
     "EMBEDDING_DIMENSIONS",
     "ClaimFingerprint",
+    "FlagOverride",
     "KnowledgeChunk",
     "KnowledgeDocument",
     "KnowledgeEmbedding",
     "KnowledgeIngestionRun",
+    "PromptTemplate",
+    "RegistryEntry",
     "TenantMixin",
     "VendorAlias",
     "VendorProfile",

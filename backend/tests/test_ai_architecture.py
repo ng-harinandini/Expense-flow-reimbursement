@@ -85,6 +85,39 @@ def _all_imports(root: Path) -> Iterator[ImportSite]:
         yield from _imports_of(path)
 
 
+def _calls_of(path: Path, names: frozenset[str]) -> list[ImportSite]:
+    """Every call in ``path`` whose callee resolves to one of ``names`` — e.g. a call to
+    ``BgeM3OnnxEmbeddingProvider(...)``, regardless of how it was imported or accessed,
+    **including** under an alias (``from ... import Foo as Bar`` then ``Bar(...)``) — an aliased
+    import is a trivial way to defeat a bare-name check, so every ``import``/``from ... import
+    ... as`` binding in the file is resolved back to its original name first.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    # local alias -> original name, e.g. {"Bar": "Foo"} for `from x import Foo as Bar`.
+    alias_to_original: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.asname:
+                    alias_to_original[alias.asname] = alias.name
+
+    sites: list[ImportSite] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        raw_name = func.id if isinstance(func, ast.Name) else (
+            func.attr if isinstance(func, ast.Attribute) else None
+        )
+        if raw_name is None:
+            continue
+        resolved_name = alias_to_original.get(raw_name, raw_name)
+        if resolved_name in names:
+            sites.append(ImportSite(path, resolved_name, node.lineno))
+    return sites
+
+
 def _fmt(violations: list[str]) -> str:
     return "\n".join(f"  - {v}" for v in violations)
 
@@ -208,6 +241,80 @@ def test_business_layers_reach_retrieval_only_via_knowledge_service() -> None:
         "app/api, app/services, app/repositories and app/domain must use "
         "app.ai.knowledge.KnowledgeService, not retrieval internals:\n" + _fmt(violations)
     )
+
+
+# ---------------------------------------------------------------------------
+# 2b. Every embedding/rerank provider is resolved through its registry, never hardcoded
+#     (T004-M11 Done Check: "every model/provider/embedding used at runtime is resolved through
+#     its registry, proven by a test that fails if a call site hardcodes a model id")
+# ---------------------------------------------------------------------------
+
+# Every concrete provider class this platform ships. A call site outside app/ai/providers/**
+# constructing one of these directly has bypassed resolve_embedding_provider()/
+# resolve_rerank_provider() and the ComponentRegistry both are built around.
+_PROVIDER_CLASS_NAMES = frozenset({
+    "BgeM3OnnxEmbeddingProvider", "OpenAIEmbeddingProvider", "CohereEmbeddingProvider",
+    "VoyageEmbeddingProvider", "BedrockTitanEmbeddingProvider", "TeiHttpEmbeddingProvider",
+    "DeterministicEmbeddingProvider", "BedrockReranker", "CohereReranker",
+    "CrossEncoderLocalReranker",
+})
+
+# The only package allowed to construct one — the factory registration call sites themselves.
+_PROVIDER_OWNER = "app/ai/providers"
+
+
+def test_no_call_site_outside_providers_hardcodes_a_provider_class() -> None:
+    """Every model/provider/embedding used at runtime must be resolved through
+    ``resolve_embedding_provider()``/``resolve_rerank_provider()`` (which read
+    ``ComponentRegistry``), never constructed directly at the point of use."""
+    violations: list[str] = []
+    for path in _python_files(AI_ROOT):
+        if _PROVIDER_OWNER in _relative(path):
+            continue
+        for site in _calls_of(path, _PROVIDER_CLASS_NAMES):
+            violations.append(f"{site.where} constructs '{site.imported}' directly")
+    assert not violations, (
+        "Only app/ai/providers/** may construct a provider class directly — everywhere else must "
+        "resolve one through resolve_embedding_provider()/resolve_rerank_provider():\n"
+        + _fmt(violations)
+    )
+
+
+def test_provider_class_name_list_is_not_stale() -> None:
+    """Guards the guard: if a new provider class is added without updating
+    ``_PROVIDER_CLASS_NAMES`` above, this test catches it — otherwise the previous test would
+    silently stop checking the new class."""
+    import ast as _ast
+
+    found: set[str] = set()
+    for path in _python_files(AI_ROOT / "providers"):
+        tree = _ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.ClassDef) and (
+                node.name.endswith("EmbeddingProvider") or node.name.endswith("Reranker")
+            ) and not node.name.startswith("_"):
+                found.add(node.name)
+    missing = found - _PROVIDER_CLASS_NAMES
+    assert not missing, (
+        f"New provider class(es) {sorted(missing)} are not covered by "
+        "test_no_call_site_outside_providers_hardcodes_a_provider_class's _PROVIDER_CLASS_NAMES — "
+        "add them there too."
+    )
+
+
+def test_calls_of_detects_a_construction_hidden_behind_an_import_alias(tmp_path: Path) -> None:
+    """A bare ``func.id``/``func.attr`` name check would miss ``from x import Foo as Bar`` then
+    ``Bar(...)`` entirely — regression test for exactly that gap, caught by a No-Slop Review."""
+    module = tmp_path / "planted_alias.py"
+    module.write_text(
+        "from app.ai.providers.embeddings.cloud import OpenAIEmbeddingProvider as OAIProvider\n"
+        "\n"
+        "def make():\n"
+        "    return OAIProvider(api_key='x')\n",
+        encoding="utf-8",
+    )
+    sites = _calls_of(module, frozenset({"OpenAIEmbeddingProvider"}))
+    assert [s.imported for s in sites] == ["OpenAIEmbeddingProvider"]
 
 
 # ---------------------------------------------------------------------------
