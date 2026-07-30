@@ -6,8 +6,8 @@ All deterministic and dependency-free. Two design points worth stating:
 :func:`estimate_tokens` is a script-aware heuristic used when no real tokenizer is available. It is
 *not* claimed to match any model's tokenizer. When the bge-m3 provider is active it exposes the
 genuine SentencePiece tokenizer, and chunkers accept an injected counter
-(:class:`~app.ai.interfaces.chunker.TokenCounter`) so budgets are exact. Getting this wrong in the
-optimistic direction is what causes silent truncation at the model boundary, so the heuristic
+(:class:`~app.ai.interfaces.embeddings.TokenCounter`) so budgets are exact. Getting this wrong in
+the optimistic direction is what causes silent truncation at the model boundary, so the heuristic
 deliberately errs high for CJK.
 
 **Language detection is a heuristic, not a model.** Unicode-script counting plus stop-word scoring

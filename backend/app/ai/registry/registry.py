@@ -277,6 +277,7 @@ rerank_registry: ComponentRegistry[Any] = ComponentRegistry(ProviderKind.RERANK)
 llm_registry: ComponentRegistry[Any] = ComponentRegistry(ProviderKind.LLM)
 cache_registry: ComponentRegistry[Any] = ComponentRegistry(ProviderKind.CACHE)
 ocr_registry: ComponentRegistry[Any] = ComponentRegistry(ProviderKind.OCR)
+chunking_registry: ComponentRegistry[Any] = ComponentRegistry(ProviderKind.CHUNKING)
 
 ALL_REGISTRIES: tuple[ComponentRegistry[Any], ...] = (
     embedding_registry,
@@ -285,6 +286,7 @@ ALL_REGISTRIES: tuple[ComponentRegistry[Any], ...] = (
     llm_registry,
     cache_registry,
     ocr_registry,
+    chunking_registry,
 )
 
 
@@ -309,6 +311,7 @@ __all__ = [
     "ComponentRegistry",
     "Registration",
     "cache_registry",
+    "chunking_registry",
     "embedding_registry",
     "llm_registry",
     "ocr_registry",

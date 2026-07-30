@@ -126,6 +126,7 @@ class ProviderKind(_WireEnum):
     VECTOR_STORE = "VECTOR_STORE"
     OCR = "OCR"
     CACHE = "CACHE"
+    CHUNKING = "CHUNKING"
 
 
 class PIIKind(_WireEnum):
