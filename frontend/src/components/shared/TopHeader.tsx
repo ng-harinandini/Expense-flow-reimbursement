@@ -1,8 +1,11 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { ChevronDown, LogOut, ReceiptText } from "lucide-react";
 
+import { useUser } from "@/context/UserContext";
+import { useToast } from "@/components/ui/toast";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -11,6 +14,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { clearSession } from "@/lib/authStorage";
+import { logout as logoutRequest } from "@/api/auth";
 
 interface TopHeaderProps {
   userName: string;
@@ -26,6 +31,17 @@ export function TopHeader({
   avatarUrl,
 }: TopHeaderProps) {
   const initial = userName.charAt(0).toUpperCase();
+  const { setUser } = useUser();
+  const toast = useToast();
+  const router = useRouter();
+
+  const handleLogout = () => {
+    void logoutRequest().catch(() => {});
+    clearSession();
+    setUser(null);
+    router.replace("/login");
+    toast({ message: "Signed out.", type: "success" });
+  };
 
   return (
     <header className="shrink-0 border-b border-border bg-card">
@@ -60,14 +76,24 @@ export function TopHeader({
 
           <DropdownMenuContent align="end" className="w-56">
             <div className="px-2 py-1.5">
-              <p className="text-sm font-semibold text-foreground">{userName}</p>
-              <p className="truncate text-xs text-muted-foreground">{userEmail}</p>
+              <p className="text-sm font-semibold text-foreground">
+                {userName}
+              </p>
+              <p className="truncate text-xs text-muted-foreground">
+                {userEmail}
+              </p>
               <p className="mt-1 text-xs text-muted-foreground">{userRole}</p>
             </div>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive">
+            <DropdownMenuItem
+              variant="destructive"
+              onSelect={(event) => {
+                event.preventDefault();
+                void handleLogout();
+              }}
+            >
               <LogOut />
-              Logout
+              {"Logout"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

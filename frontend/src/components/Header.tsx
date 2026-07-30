@@ -125,9 +125,10 @@ export const Header: React.FC<HeaderProps> = ({
               onChange={(e) => {
                 const selectedEmp = employees.find(emp => emp.id === e.target.value);
                 if (selectedEmp) {
-                  let role: UserRole = 'employee';
-                  if (selectedEmp.grade === 'L5') role = 'manager';
-                  if (selectedEmp.department === 'Finance') role = 'finance';
+                  // The employee record already carries its own role; fall back to
+                  // grade only when it is missing.
+                  const role: UserRole =
+                    selectedEmp.role ?? (selectedEmp.grade === 'L5' ? 'manager' : 'employee');
                   onRoleChange(role, selectedEmp);
                   setIsArchInspectorOpen(false);
                   if (role === 'employee') setActiveTab('workspace');
@@ -139,7 +140,7 @@ export const Header: React.FC<HeaderProps> = ({
             >
               {employees.map(emp => (
                 <option key={emp.id} value={emp.id}>
-                  {emp.name} ({emp.grade} - {emp.department})
+                  {emp.name} ({emp.grade} - {emp.role})
                 </option>
               ))}
             </select>
@@ -167,7 +168,7 @@ export const Header: React.FC<HeaderProps> = ({
               ) : currentRole === 'employee' ? (
                 <span>👤 Employee Self-Service Interface ({currentEmployee.name})</span>
               ) : currentRole === 'manager' ? (
-                <span>👔 Manager Review Portal ({currentEmployee.department} Dept)</span>
+                <span>👔 Manager Review Portal ({currentEmployee.name})</span>
               ) : (
                 <span>🏦 Finance & Audit Control Room</span>
               )}

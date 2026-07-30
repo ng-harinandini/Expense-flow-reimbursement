@@ -25,9 +25,6 @@ interface NavItem {
   roles: UserRole[];
 }
 
-// TODO: replace with real auth-derived role once auth is wired up
-const role: UserRole = "manager";
-
 const NAV_ITEMS: NavItem[] = [
   {
     label: "Submit expense",
@@ -84,10 +81,19 @@ const NAV_ITEMS: NavItem[] = [
 const REVEAL_ON_EXPAND =
   "opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100";
 
-export function Sidebar({ className }: { className?: string }) {
+export function Sidebar({
+  role,
+  className,
+}: {
+  /** The signed-in user's role; null while unknown, which shows no nav items. */
+  role: UserRole | null;
+  className?: string;
+}) {
   const pathname = usePathname();
   const asideRef = React.useRef<HTMLElement>(null);
-  const visibleNavItems = NAV_ITEMS.filter((item) => item.roles.includes(role));
+  const visibleNavItems = role
+    ? NAV_ITEMS.filter((item) => item.roles.includes(role))
+    : [];
 
   // Clicking (or Enter-ing) a nav link leaves it focused even though this is
   // a client-side route change, not a real page load. Since the sidebar's

@@ -1,8 +1,13 @@
-"""Cognito ID-token verification.
+"""Cognito access-token verification.
 
-Fetches and caches the User Pool's JWKS, then verifies an ID token's RS256 signature and
-standard claims (`iss`, `aud`, `token_use`, `exp`). Role/authorization decisions live in
-`app.core.deps` and read `custom:role_id` from the verified claims — never Cognito Groups.
+Fetches and caches the User Pool's JWKS, then verifies an access token's RS256 signature and
+standard claims (`iss`, `client_id`, `token_use`, `exp`).
+
+Access tokens, not ID tokens: the access token is the credential the SPA sends on every request
+and the only one Cognito's ``global_sign_out`` accepts, so a single token covers the whole
+session. It carries no profile or custom attributes — no `email`, no `custom:role_id` — so
+`app.core.deps` resolves the caller's role and identity from the ``employees`` table keyed on
+`sub`, making the database the single source of truth for authorization.
 """
 
 from __future__ import annotations
@@ -59,8 +64,8 @@ def _find_key(kid: str) -> Optional[dict]:
     return None
 
 
-def verify_id_token(token: str) -> Dict[str, Any]:
-    """Verify a Cognito ID token and return its claims, or raise TokenError."""
+def verify_access_token(token: str) -> Dict[str, Any]:
+    """Verify a Cognito access token and return its claims, or raise TokenError."""
     if not settings.cognito_configured:
         raise TokenError("Cognito is not configured")
     try:
@@ -77,15 +82,21 @@ def verify_id_token(token: str) -> Dict[str, Any]:
             token,
             key,
             algorithms=["RS256"],
-            audience=settings.COGNITO_APP_CLIENT_ID,
             issuer=issuer(),
-            options={"require_aud": True, "require_iss": True, "require_exp": True},
+            # Access tokens have no `aud`; the app client is carried in `client_id`,
+            # which is checked explicitly below.
+            options={"require_aud": False, "require_iss": True, "require_exp": True,
+                     "verify_aud": False},
         )
     except ExpiredSignatureError:
         raise TokenError("token expired")
     except (JWTClaimsError, JWTError) as e:
         raise TokenError(f"invalid token: {e}")
 
-    if claims.get("token_use") != "id":
-        raise TokenError("not an ID token")
+    if claims.get("token_use") != "access":
+        raise TokenError("not an access token")
+    # Equivalent of the `aud` check for ID tokens: a token minted for a different app
+    # client in the same pool must not be accepted here.
+    if claims.get("client_id") != settings.COGNITO_APP_CLIENT_ID:
+        raise TokenError("token was not issued for this app client")
     return claims

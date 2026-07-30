@@ -295,14 +295,16 @@ class RespondChallengeRequestSchema(BaseModel):
 
 
 class AuthenticatedUserSchema(BaseModel):
-    """Identity decoded from the Cognito ID token returned by login.
+    """The signed-in caller.
 
-    Role comes exclusively from custom:role_id — Cognito Groups are not used for RBAC.
+    `sub` is the Cognito identity from the verified access token; everything else is read
+    from the matching ``employees`` row. Cognito Groups are not used for RBAC.
     """
     sub: Optional[str] = None           # canonical immutable identity
     email: Optional[str] = None
-    role: Optional[str] = None          # from custom:role_id (one of the 5 app roles)
-    employeeId: Optional[str] = None    # from custom:employeeId (optional ownership link)
+    name: Optional[str] = None          # employees.full_name
+    role: Optional[str] = None          # employees.role -> one of the 5 app roles
+    employeeId: Optional[str] = None    # employees.employee_code (ownership link)
 
 
 class LoginResponseSchema(BaseModel):
@@ -316,6 +318,21 @@ class LoginResponseSchema(BaseModel):
     # Present when Cognito returns a challenge instead of tokens (e.g. NEW_PASSWORD_REQUIRED):
     challenge: Optional[str] = None
     session: Optional[str] = None
+
+
+class ForgotPasswordRequestSchema(BaseModel):
+    email: str
+
+
+class ConfirmForgotPasswordRequestSchema(BaseModel):
+    email: str
+    code: str                                   # the confirmation code Cognito emailed
+    newPassword: str
+
+
+class MessageResponseSchema(BaseModel):
+    """Generic acknowledgement for endpoints that return no data."""
+    detail: str
 
 
 class AdminCreateUserSchema(BaseModel):

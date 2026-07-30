@@ -43,6 +43,7 @@ class Actor:
             sub=getattr(user, "sub", None),
             email=getattr(user, "email", None),
             employee_code=getattr(user, "employee_id", None),
+            display_name=getattr(user, "display_name", None),
         )
 
     @classmethod

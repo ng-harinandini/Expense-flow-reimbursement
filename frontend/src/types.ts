@@ -2,6 +2,15 @@ export type UserRole = 'employee' | 'manager' | 'finance' | 'admin' | 'auditor';
 
 export type UserRoleIds= 1 | 2 | 3 | 4 | 5;
 
+export interface AuthenticatedUser {
+  sub: string | null;
+  email: string | null;
+  name?: string | null;    // employees.full_name
+  role: UserRole | null;
+  employeeId: string | null;  // employees.id
+  employeeCode: string;
+}
+
 export type EmployeeGrade = 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'Director' | 'VP';
 
 export type EmployeeStatus = 'active' | 'inactive';

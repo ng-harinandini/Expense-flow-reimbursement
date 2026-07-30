@@ -1,10 +1,12 @@
 """FastAPI dependencies: authentication, authorization, and object graph wiring.
 
-**Auth.** Authorization is derived **exclusively from the `custom:role_id` attribute** on the
-verified Cognito ID token. Cognito Groups are ignored. The employee ownership link is
-`custom:employeeId`; the canonical identity is `sub`.
+**Auth.** The caller presents a verified Cognito **access token**, whose `sub` is the canonical
+identity. Access tokens carry no profile or custom attributes, so the role, email and employee
+link are read from the matching ``employees`` row — the database is the single source of truth
+for authorization. Cognito Groups are ignored.
 
-- `get_current_user`  -> 401 on missing/invalid/expired token; 403 on missing/invalid role.
+- `get_current_user`  -> 401 on missing/invalid/expired token; 403 when `sub` matches no active
+  employee, or that employee's role is not a valid application role.
 - `require_roles(...)` -> 403 when the caller's role isn't in the allowlist.
 
 **Composition.** The provider functions at the bottom of this module construct one repository /
@@ -22,7 +24,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import TokenError, verify_id_token
+from app.core.security import TokenError, verify_access_token
 from app.core.unit_of_work import UnitOfWork
 from app.domain.actor import Actor
 from app.repositories.ai_inference_repository import AIInferenceRepository
@@ -39,9 +41,6 @@ from app.services.claim_service import ClaimService
 from app.services.employee_service import EmployeeService
 from app.services.policy_rule_service import PolicyRuleService
 
-ROLE_CLAIM = "custom:role_id"
-EMPLOYEE_ID_CLAIM = "custom:employeeId"
-
 # The only valid application roles (mirrors frontend/src/types.ts UserRole).
 VALID_ROLES = frozenset({"employee", "manager", "finance", "admin", "auditor"})
 
@@ -49,19 +48,22 @@ _bearer = HTTPBearer(auto_error=False)
 
 
 class CurrentUser:
-    """Verified caller identity resolved from the Cognito ID token."""
+    """Verified caller: `sub` from the access token, everything else from ``employees``."""
 
     def __init__(self, sub: Optional[str], email: Optional[str], role: str,
-                 employee_id: Optional[str], claims: dict):
+                 employee_id: Optional[str], claims: dict,
+                 display_name: Optional[str] = None):
         self.sub = sub
         self.email = email
         self.role = role
         self.employee_id = employee_id
         self.claims = claims
+        self.display_name = display_name
 
 
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    db: Session = Depends(get_db),
 ) -> CurrentUser:
     if credentials is None or not credentials.credentials:
         raise HTTPException(
@@ -70,7 +72,7 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     try:
-        claims = verify_id_token(credentials.credentials)
+        claims = verify_access_token(credentials.credentials)
     except TokenError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -78,25 +80,46 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    role = claims.get(ROLE_CLAIM)
-    if role not in VALID_ROLES:
-        # Authenticated, but no usable application role -> not authorized for anything.
+    sub = claims.get("sub")
+    if not sub:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has no subject.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # The access token carries no role/email, so the employee row is authoritative.
+    employee = EmployeeRepository(db).get_by_cognito_sub(sub)
+    if employee is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Missing or invalid custom:role_id.",
+            detail="No employee record is linked to this account.",
+        )
+    if not employee.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account is deactivated.",
+        )
+
+    role = employee.role_name
+    if role not in VALID_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account has no valid application role.",
         )
 
     return CurrentUser(
-        sub=claims.get("sub"),
-        email=claims.get("email"),
+        sub=sub,
+        email=employee.email,
         role=role,
-        employee_id=claims.get(EMPLOYEE_ID_CLAIM),
+        employee_id=employee.employee_code,
         claims=claims,
+        display_name=employee.full_name,
     )
 
 
 def require_roles(*roles: str):
-    """Dependency factory: allow only callers whose custom:role_id is in `roles`."""
+    """Dependency factory: allow only callers whose employee role is in `roles`."""
     allowed = frozenset(roles)
 
     def _dependency(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
