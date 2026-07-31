@@ -84,20 +84,26 @@ class AIInferenceLog(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "ai_inference_logs"
     __table_args__ = (
         Index("ix_ai_inference_logs_claim_id", "claim_id"),
-        Index("ix_ai_inference_logs_receipt_id", "receipt_id"),
+        Index("ix_ai_inference_logs_expense_item_id", "expense_item_id"),
         Index("ix_ai_inference_logs_created_at", "created_at"),
         Index("ix_ai_inference_logs_operation", "operation"),
     )
 
-    # Both nullable: an inference may relate to a claim, a receipt, both, or neither.
+    # Both nullable: an inference may relate to a claim, one of its items, both, or neither.
     claim_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("claims.id", ondelete="SET NULL", name="fk_ai_inference_logs_claim_id"),
         nullable=True,
     )
-    receipt_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    # Was ``receipt_id`` until 0008 dropped the ``receipts`` tables; receipt extraction is now
+    # recorded against the expense item that owns the document.
+    expense_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("receipts.id", ondelete="SET NULL", name="fk_ai_inference_logs_receipt_id"),
+        ForeignKey(
+            "expense_items.id",
+            ondelete="SET NULL",
+            name="fk_ai_inference_logs_expense_item_id",
+        ),
         nullable=True,
     )
 

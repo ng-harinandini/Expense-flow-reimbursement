@@ -18,6 +18,7 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from app.models.claim import Claim, Comment
 from app.models.enums import ClaimStatus, EmployeeGrade, FraudRiskLevel
+from app.models.expense_item import ExpenseItem
 from app.models.fraud import FraudResult
 from app.models.organization import Employee
 from app.models.policy import PolicyRule
@@ -28,16 +29,34 @@ def _claim_kwargs(employee: Employee, **overrides) -> dict:
         claim_number=f"EXP-TEST-{uuid.uuid4().hex[:10]}",
         employee_id=employee.id,
         employee_grade=employee.grade,
-        expense_date=date.today() - timedelta(days=1),
-        category="Meals",
-        amount=Decimal("10.00"),
+        title="Constraint fixture",
         currency="USD",
-        amount_usd=Decimal("10.00"),
-        merchant_vendor="Vendor",
         status=ClaimStatus.DRAFT,
     )
     kwargs.update(overrides)
     return kwargs
+
+
+def _item_kwargs(claim_id, **overrides) -> dict:
+    kwargs = dict(
+        claim_id=claim_id,
+        line_number=1,
+        category="Meals",
+        expense_date=date.today() - timedelta(days=1),
+        merchant_vendor="Vendor",
+        amount=Decimal("10.00"),
+        currency="USD",
+        amount_usd=Decimal("10.00"),
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+def _persisted_claim(db_session, employee, **overrides) -> Claim:
+    claim = Claim(**_claim_kwargs(employee, **overrides))
+    db_session.add(claim)
+    db_session.flush()
+    return claim
 
 
 # --- claims check constraints -------------------------------------------------
@@ -46,11 +65,14 @@ def _claim_kwargs(employee: Employee, **overrides) -> dict:
 @pytest.mark.parametrize(
     "overrides, constraint",
     [
-        ({"amount": Decimal("0")}, "ck_claims_amount_positive"),
-        ({"amount": Decimal("-5")}, "ck_claims_amount_positive"),
-        ({"amount_usd": Decimal("0")}, "ck_claims_amount_usd_positive"),
         ({"currency": "US"}, "ck_claims_currency_iso4217"),
-        ({"fx_rate": Decimal("0")}, "ck_claims_fx_rate_positive"),
+        ({"total_amount": Decimal("-1")}, "ck_claims_total_amount_non_negative"),
+        ({"total_amount_usd": Decimal("-1")}, "ck_claims_total_amount_usd_non_negative"),
+        ({"item_count": -1}, "ck_claims_item_count_non_negative"),
+        (
+            {"from_date": date(2026, 7, 10), "to_date": date(2026, 7, 1)},
+            "ck_claims_date_range_ordered",
+        ),
     ],
 )
 def test_claims_reject_invalid_values(db_session, employee, overrides, constraint):
@@ -59,6 +81,85 @@ def test_claims_reject_invalid_values(db_session, employee, overrides, constrain
         db_session.flush()
     assert constraint in str(raised.value.orig)
     db_session.rollback()
+
+
+# --- expense item check constraints -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "overrides, constraint",
+    [
+        ({"amount": Decimal("0")}, "ck_expense_items_amount_positive"),
+        ({"amount": Decimal("-5")}, "ck_expense_items_amount_positive"),
+        ({"amount_usd": Decimal("0")}, "ck_expense_items_amount_usd_positive"),
+        ({"currency": "US"}, "ck_expense_items_currency_iso4217"),
+        ({"fx_rate": Decimal("0")}, "ck_expense_items_fx_rate_positive"),
+        ({"line_number": 0}, "ck_expense_items_line_number_positive"),
+        ({"file_size_bytes": -1}, "ck_expense_items_file_size_non_negative"),
+        ({"fraud_risk_score": 101}, "ck_expense_items_fraud_risk_score_range"),
+    ],
+)
+def test_expense_items_reject_invalid_values(
+    db_session, employee, overrides, constraint
+):
+    claim = _persisted_claim(db_session, employee)
+    db_session.add(ExpenseItem(**_item_kwargs(claim.id, **overrides)))
+    with pytest.raises(IntegrityError) as raised:
+        db_session.flush()
+    assert constraint in str(raised.value.orig)
+    db_session.rollback()
+
+
+def test_line_number_is_unique_within_a_claim(db_session, employee):
+    """Ordering must be stable, so a claim cannot hold two line 1s."""
+    claim = _persisted_claim(db_session, employee)
+    db_session.add(ExpenseItem(**_item_kwargs(claim.id, line_number=1)))
+    db_session.flush()
+    db_session.add(ExpenseItem(**_item_kwargs(claim.id, line_number=1)))
+    with pytest.raises(IntegrityError) as raised:
+        db_session.flush()
+    assert "uq_expense_items_claim_line_number" in str(raised.value.orig)
+    db_session.rollback()
+
+
+def test_totals_trigger_tracks_inserts_updates_and_deletes(db_session, employee):
+    """``claims`` roll-ups are database-maintained; nothing in the app assigns them."""
+    claim = _persisted_claim(db_session, employee)
+
+    first = ExpenseItem(**_item_kwargs(claim.id, line_number=1, amount=Decimal("10.00"),
+                                       amount_usd=Decimal("10.00")))
+    second = ExpenseItem(**_item_kwargs(claim.id, line_number=2, amount=Decimal("32.50"),
+                                        amount_usd=Decimal("32.50")))
+    db_session.add_all([first, second])
+    db_session.flush()
+    db_session.refresh(claim, ["total_amount", "total_amount_usd", "item_count"])
+    assert (claim.total_amount, claim.item_count) == (Decimal("42.50"), 2)
+
+    first.amount = Decimal("15.00")
+    first.amount_usd = Decimal("15.00")
+    db_session.flush()
+    db_session.refresh(claim, ["total_amount", "item_count"])
+    assert claim.total_amount == Decimal("47.50")
+
+    db_session.delete(second)
+    db_session.flush()
+    db_session.refresh(claim, ["total_amount", "item_count"])
+    assert (claim.total_amount, claim.item_count) == (Decimal("15.00"), 1)
+
+
+def test_totals_trigger_does_not_disturb_the_optimistic_lock(db_session, employee):
+    """Inserting an item must not bump ``claims.version``.
+
+    If it did, every added line would invalidate a concurrent reviewer's expected version for no
+    business reason.
+    """
+    claim = _persisted_claim(db_session, employee)
+    before = claim.version
+
+    db_session.add(ExpenseItem(**_item_kwargs(claim.id)))
+    db_session.flush()
+    db_session.refresh(claim)
+    assert claim.version == before
 
 
 def test_draft_claim_cannot_have_a_submission_timestamp(db_session, employee):
@@ -95,24 +196,15 @@ def test_claim_number_is_unique(db_session, employee):
     db_session.rollback()
 
 
-def test_one_claim_per_receipt(db_session, employee):
-    """The database half of "a receipt can only back one claim"."""
-    from app.models.receipt import ExtractionStatus, Receipt
-
-    receipt = Receipt(
-        file_name="r.png", extraction_status=ExtractionStatus.COMPLETED,
-        employee_id=employee.employee_code, employee_ref_id=employee.id,
-    )
-    db_session.add(receipt)
+def test_deleting_a_claim_cascades_to_its_items(db_session, employee):
+    """Items are owned by the claim, like every other claim child."""
+    claim = _persisted_claim(db_session, employee)
+    db_session.add(ExpenseItem(**_item_kwargs(claim.id)))
     db_session.flush()
 
-    db_session.add(Claim(**_claim_kwargs(employee, receipt_id=receipt.id)))
+    db_session.delete(claim)
     db_session.flush()
-    db_session.add(Claim(**_claim_kwargs(employee, receipt_id=receipt.id)))
-    with pytest.raises(IntegrityError) as raised:
-        db_session.flush()
-    assert "uq_claims_receipt_id" in str(raised.value.orig)
-    db_session.rollback()
+    assert db_session.query(ExpenseItem).filter_by(claim_id=claim.id).count() == 0
 
 
 def test_claim_requires_a_real_employee(db_session, employee):
@@ -171,10 +263,10 @@ def test_trigger_permits_updates_that_do_not_change_status(db_session, employee)
     db_session.flush()
 
     db_session.execute(
-        text("UPDATE claims SET purpose_description = 'edited' WHERE id = :id"), {"id": claim.id}
+        text("UPDATE claims SET purpose = 'edited' WHERE id = :id"), {"id": claim.id}
     )
     db_session.expire(claim)
-    assert claim.purpose_description == "edited"
+    assert claim.purpose == "edited"
 
 
 # --- audit immutability -------------------------------------------------------
@@ -228,7 +320,7 @@ def test_stale_write_is_rejected_by_the_version_check(db_session, employee):
         {"id": claim.id},
     )
 
-    claim.purpose_description = "loser"
+    claim.purpose = "loser"
     with pytest.raises(StaleDataError):
         db_session.flush()
     db_session.rollback()
@@ -241,9 +333,9 @@ def test_version_increments_on_each_update(db_session, employee):
     db_session.flush()
     first = claim.version
 
-    claim.purpose_description = "one"
+    claim.purpose = "one"
     db_session.flush()
-    claim.purpose_description = "two"
+    claim.purpose = "two"
     db_session.flush()
     assert claim.version == first + 2
 

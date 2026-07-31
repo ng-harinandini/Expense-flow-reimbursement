@@ -40,6 +40,7 @@ from app.schemas.schemas import (
     CommentCreateSchema,
     ExpenseClaimCreateSchema,
     ExpenseClaimUpdateSchema,
+    ItemDecisionRequestSchema,
 )
 from app.services.claim_service import ClaimService
 from app.services.mappers import claim_to_dict
@@ -169,6 +170,33 @@ def execute_claim_action(
     actor = Actor.from_current_user(current)
     claim = service.execute_action(
         claim_id,
+        action=payload.action,
+        actor=actor,
+        notes=payload.notes,
+        expected_version=payload.expectedVersion,
+    )
+    uow.commit()
+    return _serialize(claim, actor)
+
+
+@router.post("/{claim_id}/items/{item_id}/decision", response_model=dict)
+def decide_expense_item(
+    claim_id: str,
+    item_id: str,
+    payload: ItemDecisionRequestSchema,
+    current: CurrentUser = Depends(require_roles("manager", "finance", "admin")),
+    service: ClaimService = Depends(get_claim_service),
+    uow: UnitOfWork = Depends(get_unit_of_work),
+):
+    """Approve or reject one expense item of a claim.
+
+    The claim itself moves only once every item has been decided: approved if any item survived,
+    rejected if all were rejected. A rejection requires a reason.
+    """
+    actor = Actor.from_current_user(current)
+    claim = service.decide_item(
+        claim_id,
+        item_id,
         action=payload.action,
         actor=actor,
         notes=payload.notes,

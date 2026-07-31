@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # --- AWS / S3 / Textract ---
     AWS_REGION: str = "us-east-1"
     S3_BUCKET_NAME: Optional[str] = None
+    #: Ceiling for a receipt upload. ``POST /expense-items/upload`` creates no database row, so
+    #: nothing else bounds how much a caller can push into object storage.
+    MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024
     TEXTRACT_ENABLED: bool = False
 
     # --- AWS Cognito (authentication) ---

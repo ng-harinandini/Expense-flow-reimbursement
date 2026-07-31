@@ -22,14 +22,20 @@ from decimal import Decimal
 from typing import Optional, Sequence
 
 from sqlalchemy import func, or_, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.context import current_correlation_id, current_request_id
 from app.core.logging import get_logger
 from app.domain import claim_state_machine as fsm
 from app.domain.errors import ImmutableEntityError
 from app.models.claim import Attachment, Claim, ClaimStatusHistory, Comment
-from app.models.enums import AttachmentKind, ClaimStatus, FraudRiskLevel
+from app.models.enums import (
+    AttachmentKind,
+    ClaimStatus,
+    ExpenseItemStatus,
+    FraudRiskLevel,
+)
+from app.models.expense_item import ExpenseItem
 from app.models.fraud import FraudResult
 from app.repositories.base import BaseRepository
 
@@ -114,16 +120,39 @@ class ClaimRepository(BaseRepository[Claim]):
 
         if query.employee_id is not None:
             stmt = stmt.where(Claim.employee_id == query.employee_id)
+        # The expense filters moved down to the items, so they become "contains an item that…"
+        # rather than a property of the claim itself. The public filter names are unchanged.
         if query.category:
-            stmt = stmt.where(Claim.category == query.category)
+            stmt = stmt.where(
+                select(ExpenseItem.id)
+                .where(
+                    ExpenseItem.claim_id == Claim.id,
+                    ExpenseItem.category == query.category,
+                )
+                .exists()
+            )
         if query.status is not None:
             stmt = stmt.where(Claim.status == query.status)
         if query.assigned_reviewer_id is not None:
             stmt = stmt.where(Claim.assigned_reviewer_id == query.assigned_reviewer_id)
         if query.expense_date_from is not None:
-            stmt = stmt.where(Claim.expense_date >= query.expense_date_from)
+            stmt = stmt.where(
+                select(ExpenseItem.id)
+                .where(
+                    ExpenseItem.claim_id == Claim.id,
+                    ExpenseItem.expense_date >= query.expense_date_from,
+                )
+                .exists()
+            )
         if query.expense_date_to is not None:
-            stmt = stmt.where(Claim.expense_date <= query.expense_date_to)
+            stmt = stmt.where(
+                select(ExpenseItem.id)
+                .where(
+                    ExpenseItem.claim_id == Claim.id,
+                    ExpenseItem.expense_date <= query.expense_date_to,
+                )
+                .exists()
+            )
 
         if query.risk_level is not None:
             # Match on the *latest* screening per claim, never a superseded one. ROW_NUMBER (rather
@@ -159,18 +188,27 @@ class ClaimRepository(BaseRepository[Claim]):
             ).scalar_one()
         )
 
-    def list_for_employee(
+    def list_items_for_employee(
         self, employee_id: uuid.UUID, *, exclude_claim_id: Optional[uuid.UUID] = None,
         limit: Optional[int] = None,
-    ) -> Sequence[Claim]:
-        """An employee's claim history — the corpus fraud screening compares against."""
-        stmt = select(Claim).where(Claim.employee_id == employee_id)
+    ) -> Sequence[ExpenseItem]:
+        """An employee's expense history — the corpus fraud screening compares against.
+
+        Items, not claims: every fraud predicate (vendor, date, amount) is per-expense, and a
+        multi-item claim would otherwise collapse into one comparable row.
+        """
+        stmt = (
+            select(ExpenseItem)
+            .join(Claim, ExpenseItem.claim_id == Claim.id)
+            .options(joinedload(ExpenseItem.claim))
+            .where(Claim.employee_id == employee_id)
+        )
         if exclude_claim_id is not None:
-            stmt = stmt.where(Claim.id != exclude_claim_id)
-        stmt = stmt.order_by(Claim.expense_date.desc())
+            stmt = stmt.where(ExpenseItem.claim_id != exclude_claim_id)
+        stmt = stmt.order_by(ExpenseItem.expense_date.desc())
         return self._all(self._paginate(stmt, limit=limit))
 
-    def find_duplicate_claims(
+    def find_duplicate_items(
         self,
         *,
         employee_id: uuid.UUID,
@@ -179,52 +217,90 @@ class ClaimRepository(BaseRepository[Claim]):
         amount_usd: Decimal,
         exclude_claim_id: Optional[uuid.UUID] = None,
         include_rejected: bool = False,
-    ) -> Sequence[Claim]:
-        """Claims that look like the same expense filed twice.
+    ) -> Sequence[ExpenseItem]:
+        """Items that look like the same expense filed twice.
 
         Same employee, same vendor (case/whitespace-insensitive), same expense date, and the same
-        amount within :data:`DUPLICATE_AMOUNT_TOLERANCE`. Rejected claims are excluded by default:
-        re-filing a corrected version of a rejected claim is legitimate.
+        amount within :data:`DUPLICATE_AMOUNT_TOLERANCE`. Rejected work is excluded by default —
+        re-filing a corrected version of a rejected expense is legitimate — and that now means
+        **two** filters: the claim as a whole may be rejected, or just this line of it.
         """
         vendor = (merchant_vendor or "").strip().lower()
         amount = Decimal(amount_usd)
 
-        stmt = select(Claim).where(
-            Claim.employee_id == employee_id,
-            Claim.expense_date == expense_date,
-            func.lower(func.btrim(Claim.merchant_vendor)) == vendor,
-            func.abs(Claim.amount_usd - amount) < DUPLICATE_AMOUNT_TOLERANCE,
+        stmt = (
+            select(ExpenseItem)
+            .join(Claim, ExpenseItem.claim_id == Claim.id)
+            .options(joinedload(ExpenseItem.claim))
+            .where(
+                Claim.employee_id == employee_id,
+                ExpenseItem.expense_date == expense_date,
+                func.lower(func.btrim(ExpenseItem.merchant_vendor)) == vendor,
+                func.abs(ExpenseItem.amount_usd - amount) < DUPLICATE_AMOUNT_TOLERANCE,
+            )
         )
         if not include_rejected:
-            stmt = stmt.where(Claim.status != ClaimStatus.REJECTED)
+            stmt = stmt.where(
+                Claim.status != ClaimStatus.REJECTED,
+                ExpenseItem.status != ExpenseItemStatus.REJECTED,
+            )
         if exclude_claim_id is not None:
-            stmt = stmt.where(Claim.id != exclude_claim_id)
+            stmt = stmt.where(ExpenseItem.claim_id != exclude_claim_id)
 
-        return self._all(stmt.order_by(Claim.created_at.desc()))
+        return self._all(stmt.order_by(ExpenseItem.created_at.desc()))
 
-    def find_same_day_vendor_claims(
+    def find_same_day_vendor_items(
         self,
         *,
         employee_id: uuid.UUID,
         merchant_vendor: str,
         expense_date: date,
         exclude_claim_id: Optional[uuid.UUID] = None,
-    ) -> Sequence[Claim]:
+    ) -> Sequence[ExpenseItem]:
         """Same employee + vendor + day, any amount — the split-transaction probe."""
         vendor = (merchant_vendor or "").strip().lower()
-        stmt = select(Claim).where(
-            Claim.employee_id == employee_id,
-            Claim.expense_date == expense_date,
-            func.lower(func.btrim(Claim.merchant_vendor)) == vendor,
-            Claim.status != ClaimStatus.REJECTED,
+        stmt = (
+            select(ExpenseItem)
+            .join(Claim, ExpenseItem.claim_id == Claim.id)
+            .options(joinedload(ExpenseItem.claim))
+            .where(
+                Claim.employee_id == employee_id,
+                ExpenseItem.expense_date == expense_date,
+                func.lower(func.btrim(ExpenseItem.merchant_vendor)) == vendor,
+                Claim.status != ClaimStatus.REJECTED,
+                ExpenseItem.status != ExpenseItemStatus.REJECTED,
+            )
         )
         if exclude_claim_id is not None:
-            stmt = stmt.where(Claim.id != exclude_claim_id)
-        return self._all(stmt.order_by(Claim.created_at.desc()))
+            stmt = stmt.where(ExpenseItem.claim_id != exclude_claim_id)
+        return self._all(stmt.order_by(ExpenseItem.created_at.desc()))
 
-    def find_by_receipt_id(self, receipt_id: uuid.UUID) -> Optional[Claim]:
-        """The claim already using this receipt, if any (``receipt_id`` is UNIQUE)."""
-        return self._one_or_none(select(Claim).where(Claim.receipt_id == receipt_id))
+    def find_items_by_file_hash(
+        self,
+        file_hash: str,
+        *,
+        employee_id: Optional[uuid.UUID] = None,
+        exclude_claim_id: Optional[uuid.UUID] = None,
+    ) -> Sequence[ExpenseItem]:
+        """Items backed by the byte-identical receipt document.
+
+        The strongest duplicate signal there is: the same file, not merely a similar expense.
+        Scoped to one employee when ``employee_id`` is given, unscoped when the caller wants to
+        catch the same receipt claimed by two different people.
+        """
+        if not file_hash:
+            return []
+        stmt = (
+            select(ExpenseItem)
+            .join(Claim, ExpenseItem.claim_id == Claim.id)
+            .options(joinedload(ExpenseItem.claim))
+            .where(ExpenseItem.file_hash == file_hash)
+        )
+        if employee_id is not None:
+            stmt = stmt.where(Claim.employee_id == employee_id)
+        if exclude_claim_id is not None:
+            stmt = stmt.where(ExpenseItem.claim_id != exclude_claim_id)
+        return self._all(stmt.order_by(ExpenseItem.created_at.desc()))
 
     def list_review_queue(
         self, *, reviewer_id: Optional[uuid.UUID] = None, limit: Optional[int] = None
@@ -488,13 +564,54 @@ class ClaimRepository(BaseRepository[Claim]):
         self.session.flush()
         return comment
 
+    # --- expense items -------------------------------------------------------
+
+    def next_line_number(self, claim_id: uuid.UUID) -> int:
+        """Next ``line_number`` for a claim — gap-free and unique, like history ``sequence``."""
+        current = self.session.execute(
+            select(func.coalesce(func.max(ExpenseItem.line_number), 0)).where(
+                ExpenseItem.claim_id == claim_id
+            )
+        ).scalar_one()
+        return int(current) + 1
+
+    def add_item(self, claim: Claim, **fields) -> ExpenseItem:
+        """Append an item to ``claim``.
+
+        The flush is what fires ``expense_items_recalculate_claim_totals``, so the claim's
+        ``total_amount``/``total_amount_usd``/``item_count`` are stale in this session until it is
+        refreshed — see :meth:`refresh_totals`.
+        """
+        fields.setdefault("line_number", self.next_line_number(claim.id))
+        item = ExpenseItem(claim_id=claim.id, **fields)
+        self.session.add(item)
+        self.session.flush()
+        return item
+
+    def get_item(self, item_id: uuid.UUID) -> Optional[ExpenseItem]:
+        return self._one_or_none(
+            select(ExpenseItem)
+            .options(joinedload(ExpenseItem.claim))
+            .where(ExpenseItem.id == item_id)
+        )
+
+    def refresh_totals(self, claim: Claim) -> Claim:
+        """Re-read the trigger-maintained roll-ups.
+
+        The totals trigger writes to ``claims`` outside SQLAlchemy's unit of work, so the in-session
+        object still holds the pre-insert values. Only the three roll-up columns are expired —
+        ``version`` is deliberately untouched by the trigger and must not be invalidated here.
+        """
+        self.session.refresh(claim, ["total_amount", "total_amount_usd", "item_count"])
+        return claim
+
     def add_attachment(
         self,
         claim: Claim,
         *,
         file_name: str,
         kind: AttachmentKind = AttachmentKind.SUPPORTING,
-        receipt_id: Optional[uuid.UUID] = None,
+        expense_item_id: Optional[uuid.UUID] = None,
         content_type: Optional[str] = None,
         file_size_bytes: Optional[int] = None,
         s3_bucket: Optional[str] = None,
@@ -504,7 +621,7 @@ class ClaimRepository(BaseRepository[Claim]):
     ) -> Attachment:
         attachment = Attachment(
             claim_id=claim.id,
-            receipt_id=receipt_id,
+            expense_item_id=expense_item_id,
             kind=kind,
             file_name=file_name,
             content_type=content_type,

@@ -1,8 +1,9 @@
-"""Remaining repository behaviour: the generic base, directory, receipts, workflow, AI ledger."""
+"""Remaining repository behaviour: the generic base, directory, items, workflow, AI ledger."""
 
 from __future__ import annotations
 
 import uuid
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -14,8 +15,8 @@ from app.models.enums import (
     ApprovalStepStatus,
     ApprovalWorkflowStatus,
     ClaimStatus,
+    ExpenseItemStatus,
 )
-from app.models.receipt import ExtractionStatus, Receipt
 
 
 # --- generic base ------------------------------------------------------------
@@ -157,12 +158,16 @@ def test_employee_derived_properties(employee):
     assert employee.manager_name == "Test Manager"
 
 
-def test_next_employee_code_increments_and_defaults_to_emp_000(repositories, role_id):
+def test_next_employee_code_increments_past_the_highest_suffix(repositories, role_id):
+    """Allocation follows the highest existing suffix, not the row count.
+
+    Deliberately does not assert the empty-table value: other fixtures in this session may have
+    inserted employees already, and the property that matters is the increment.
+    """
     from app.models.enums import EmployeeGrade
     from app.models.organization import Employee
 
     employees = repositories["employees"]
-    assert employees.next_employee_code() == "emp-000"
 
     employees.add(
         Employee(
@@ -180,67 +185,66 @@ def test_get_by_codes_batches_lookup(repositories, employee, other_employee):
     assert employees.get_by_codes([]) == {}
 
 
-# --- receipts ----------------------------------------------------------------
+# --- expense items -----------------------------------------------------------
 
 
-@pytest.fixture
-def stored_receipt(repositories, employee):
-    return repositories["receipts"].add(
-        Receipt(
-            file_name="lunch.png", content_type="image/png", file_size_bytes=100,
-            extraction_status=ExtractionStatus.COMPLETED, extraction_source="fallback",
-            employee_id=employee.employee_code, employee_ref_id=employee.id,
-            vendor_name="Sweetgreen", total_amount=Decimal("22.50"), currency="USD",
-        )
+def test_line_numbers_are_sequential_within_a_claim(repositories, make_claim):
+    claim = make_claim(
+        items=[{"amount": Decimal("10.00")}, {"amount": Decimal("20.00")}]
+    )
+    assert [i.line_number for i in claim.items] == [1, 2]
+    assert repositories["claims"].next_line_number(claim.id) == 3
+
+
+def test_totals_trigger_sums_the_items(repositories, make_claim):
+    """``claims`` roll-ups are maintained by the database, not the application."""
+    claim = make_claim(
+        items=[{"amount": Decimal("10.00")}, {"amount": Decimal("32.50")}]
+    )
+    assert claim.total_amount == Decimal("42.50")
+    assert claim.total_amount_usd == Decimal("42.50")
+    assert claim.item_count == 2
+
+
+def test_totals_trigger_reacts_to_delete(repositories, db_session, make_claim):
+    claim = make_claim(
+        items=[{"amount": Decimal("10.00")}, {"amount": Decimal("32.50")}]
+    )
+    db_session.delete(claim.items[1])
+    db_session.flush()
+    repositories["claims"].refresh_totals(claim)
+    assert claim.total_amount == Decimal("10.00")
+    assert claim.item_count == 1
+
+
+def test_find_items_by_file_hash_matches_the_exact_document(repositories, make_claim):
+    """The strongest duplicate signal: byte-identical receipts, not merely similar expenses."""
+    digest = "a" * 64
+    claim = make_claim(items=[{"amount": Decimal("15.00"), "file_hash": digest}])
+
+    found = repositories["claims"].find_items_by_file_hash(digest)
+    assert {i.id for i in found} == {claim.items[0].id}
+    assert repositories["claims"].find_items_by_file_hash("b" * 64) == []
+    assert repositories["claims"].find_items_by_file_hash("") == []
+
+
+def test_duplicate_items_ignore_rejected_lines(repositories, make_claim, employee):
+    """Re-filing a corrected version of a rejected expense is legitimate."""
+    vendor = "Sweetgreen"
+    when = date.today() - timedelta(days=3)
+    make_claim(
+        items=[
+            {
+                "amount": Decimal("22.50"), "merchant_vendor": vendor, "expense_date": when,
+                "status": ExpenseItemStatus.REJECTED,
+            }
+        ]
     )
 
-
-def test_receipts_listed_newest_first_and_scoped_by_code(
-    repositories, stored_receipt, employee, other_employee
-):
-    receipts = repositories["receipts"]
-    receipts.add(
-        Receipt(
-            file_name="theirs.png", extraction_status=ExtractionStatus.COMPLETED,
-            employee_id=other_employee.employee_code, employee_ref_id=other_employee.id,
-        )
-    )
-
-    mine = receipts.list_for_employee_code(employee.employee_code)
-    assert stored_receipt.id in {r.id for r in mine}
-    assert all(r.employee_id == employee.employee_code for r in mine)
-
-    everyones = receipts.list_for_employee_code(None)
-    timestamps = [r.created_at for r in everyones]
-    assert timestamps == sorted(timestamps, reverse=True)
-
-
-def test_receipts_filtered_by_extraction_status(repositories, stored_receipt):
-    receipts = repositories["receipts"]
-    receipts.add(Receipt(file_name="pending.png", extraction_status=ExtractionStatus.PENDING))
-
-    completed = receipts.list_by_status(ExtractionStatus.COMPLETED)
-    assert stored_receipt.id in {r.id for r in completed}
-    assert all(r.extraction_status is ExtractionStatus.COMPLETED for r in completed)
-
-
-def test_is_claimed_and_claim_using(repositories, stored_receipt, make_claim):
-    receipts = repositories["receipts"]
-    assert receipts.is_claimed(stored_receipt.id) is False
-    assert receipts.claim_using(stored_receipt.id) is None
-
-    claim = make_claim(receipt_id=stored_receipt.id)
-    assert receipts.is_claimed(stored_receipt.id) is True
-    assert receipts.claim_using(stored_receipt.id).id == claim.id
-
-
-def test_link_employee_sets_the_uuid_reference(repositories, employee):
-    receipts = repositories["receipts"]
-    orphan = receipts.add(
-        Receipt(file_name="orphan.png", extraction_status=ExtractionStatus.COMPLETED)
-    )
-    receipts.link_employee(orphan, employee.id)
-    assert orphan.employee_ref_id == employee.id
+    assert repositories["claims"].find_duplicate_items(
+        employee_id=employee.id, merchant_vendor=vendor,
+        expense_date=when, amount_usd=Decimal("22.50"),
+    ) == []
 
 
 # --- approval workflow -------------------------------------------------------
@@ -401,18 +405,16 @@ def test_record_inference_accepts_a_failure_with_a_message(repositories):
     assert entry.error_message == "quota exceeded"
 
 
-def test_inference_queries_by_claim_receipt_and_operation(repositories, make_claim, employee):
+def test_inference_queries_by_claim_item_and_operation(repositories, make_claim, employee):
     ledger = repositories["ai"]
     claim = make_claim()
-    receipt = repositories["receipts"].add(
-        Receipt(file_name="r.png", extraction_status=ExtractionStatus.COMPLETED)
-    )
+    item = claim.items[0]
 
     ledger.record(provider="p", model="m", operation="ocr_extract", claim_id=claim.id)
-    ledger.record(provider="p", model="m", operation="ocr_extract", receipt_id=receipt.id)
+    ledger.record(provider="p", model="m", operation="ocr_extract", expense_item_id=item.id)
 
     assert len(ledger.list_for_claim(claim.id)) == 1
-    assert len(ledger.list_for_receipt(receipt.id)) == 1
+    assert len(ledger.list_for_expense_item(item.id)) == 1
     assert len(ledger.list_recent(operation="ocr_extract")) == 2
     assert ledger.list_recent(operation="never_run") == []
 

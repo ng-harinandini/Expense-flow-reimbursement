@@ -31,7 +31,7 @@ class AIInferenceRepository(BaseRepository[AIInferenceLog]):
         operation: str,
         status: AIInferenceStatus | str = AIInferenceStatus.SUCCESS,
         claim_id: Optional[uuid.UUID] = None,
-        receipt_id: Optional[uuid.UUID] = None,
+        expense_item_id: Optional[uuid.UUID] = None,
         input_summary: Optional[dict[str, Any]] = None,
         output_summary: Optional[dict[str, Any]] = None,
         error_message: Optional[str] = None,
@@ -42,7 +42,7 @@ class AIInferenceRepository(BaseRepository[AIInferenceLog]):
     ) -> AIInferenceLog:
         entry = AIInferenceLog(
             claim_id=claim_id,
-            receipt_id=receipt_id,
+            expense_item_id=expense_item_id,
             provider=provider,
             model=model,
             operation=operation,
@@ -73,13 +73,13 @@ class AIInferenceRepository(BaseRepository[AIInferenceLog]):
             )
         )
 
-    def list_for_receipt(
-        self, receipt_id: uuid.UUID, *, limit: Optional[int] = None
+    def list_for_expense_item(
+        self, expense_item_id: uuid.UUID, *, limit: Optional[int] = None
     ) -> Sequence[AIInferenceLog]:
         return self._all(
             self._paginate(
                 select(AIInferenceLog)
-                .where(AIInferenceLog.receipt_id == receipt_id)
+                .where(AIInferenceLog.expense_item_id == expense_item_id)
                 .order_by(AIInferenceLog.created_at.desc()),
                 limit=limit,
             )

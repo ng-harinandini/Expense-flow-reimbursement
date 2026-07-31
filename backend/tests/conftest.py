@@ -37,7 +37,7 @@ from app.core.deps import CurrentUser
 from app.domain.actor import Actor
 from app.main import app
 from app.models.claim import Claim
-from app.models.enums import ClaimStatus, EmployeeGrade
+from app.models.enums import ClaimStatus, EmployeeGrade, ExpenseItemStatus
 from app.models.organization import Employee
 from app.models.role import Role
 
@@ -279,7 +279,6 @@ def repositories(db_session: Session) -> dict:
         EmployeeRepository,
         FraudResultRepository,
         PolicyRuleRepository,
-        ReceiptRepository,
         RoleRepository,
     )
 
@@ -291,7 +290,6 @@ def repositories(db_session: Session) -> dict:
         "audit": AuditLogRepository(db_session),
         "fraud": FraudResultRepository(db_session),
         "workflows": ApprovalWorkflowRepository(db_session),
-        "receipts": ReceiptRepository(db_session),
         "ai": AIInferenceRepository(db_session),
     }
 
@@ -312,7 +310,6 @@ def claim_service(repositories: dict):
         claim_repository=repositories["claims"],
         fraud_repository=repositories["fraud"],
         workflow_repository=repositories["workflows"],
-        receipt_repository=repositories["receipts"],
         employee_service=employees,
         policy_rule_service=policies,
         audit_service=audit,
@@ -338,10 +335,15 @@ def policy_rule_service(repositories: dict, audit_service):
 
 @pytest.fixture
 def claim_payload():
-    """A minimal, valid ``POST /claims`` body. Override any key per test."""
+    """A minimal, valid ``POST /claims`` body: a header plus one expense item.
 
-    def _payload(**overrides) -> dict:
-        payload = {
+    Per-expense keys passed as overrides are applied to the **first item**, so a test that only
+    cares about one expense still reads as ``claim_payload(amount=...)``. Pass ``items=[...]``
+    explicitly to build a multi-item claim, or ``extra_items=[...]`` to append to the default one.
+    """
+
+    def _item(**overrides) -> dict:
+        item = {
             "category": "Meals",
             "subCategory": "Team Lunch",
             "amount": Decimal("22.50"),
@@ -352,9 +354,26 @@ def claim_payload():
             "purposeDescription": "Team sync lunch.",
             "receiptAttached": True,
         }
-        payload.update(overrides)
+        item.update(overrides)
+        return item
+
+    _HEADER_KEYS = {"title", "purpose", "fromDate", "toDate", "employeeId", "items"}
+
+    def _payload(**overrides) -> dict:
+        extra_items = overrides.pop("extra_items", [])
+        header = {key: overrides.pop(key) for key in list(overrides) if key in _HEADER_KEYS}
+        # Anything left over is an expense fact and belongs to the first item.
+        items = header.pop("items", None) or [_item(**overrides), *extra_items]
+
+        payload = {
+            "title": "Test expense report",
+            "currency": "USD",
+            "items": items,
+        }
+        payload.update(header)
         return payload
 
+    _payload.item = _item  # exposed so tests can build sibling items
     return _payload
 
 
@@ -429,26 +448,62 @@ def make_claim(db_session: Session, employee: Employee):
         category: str = "Meals",
         vendor: Optional[str] = None,
         expense_date: Optional[date] = None,
+        items: Optional[list[dict]] = None,
+        item_status: ExpenseItemStatus = ExpenseItemStatus.SUBMITTED,
         **columns,
     ) -> Claim:
+        """Insert a claim with one item by default; pass ``items=[{...}]`` for several.
+
+        The per-expense keyword arguments describe that single default item, so a test about one
+        expense reads the same as it did before items existed.
+        """
         subject = owner or employee
         claim = Claim(
             claim_number=repository.next_claim_number(),
             employee_id=subject.id,
             employee_grade=subject.grade or EmployeeGrade.L3,
-            expense_date=expense_date or (date.today() - timedelta(days=2)),
-            category=category,
-            sub_category="Test",
-            amount=amount,
+            title="Fixture claim",
             currency="USD",
-            amount_usd=amount,
-            merchant_vendor=vendor or f"Vendor {uuid.uuid4().hex[:8]}",
-            purpose_description="Fixture claim.",
-            receipt_attached=True,
             **columns,
         )
         repository.create_claim(claim, actor_sub="sub-fixture", actor_name="Fixture",
                                 actor_role="employee")
+
+        specs = items if items is not None else [
+            {
+                "amount": amount,
+                "category": category,
+                "merchant_vendor": vendor,
+                "expense_date": expense_date,
+            }
+        ]
+        for spec in specs:
+            item_amount = spec.get("amount", Decimal("42.00"))
+            repository.add_item(
+                claim,
+                category=spec.get("category", "Meals"),
+                sub_category=spec.get("sub_category", "Test"),
+                expense_date=spec.get("expense_date") or (date.today() - timedelta(days=2)),
+                merchant_vendor=(
+                    spec.get("merchant_vendor") or f"Vendor {uuid.uuid4().hex[:8]}"
+                ),
+                purpose_description=spec.get("purpose_description", "Fixture item."),
+                amount=item_amount,
+                currency=spec.get("currency", "USD"),
+                amount_usd=spec.get("amount_usd", item_amount),
+                receipt_attached=spec.get("receipt_attached", True),
+                status=spec.get("status", item_status),
+                **{
+                    k: v for k, v in spec.items()
+                    if k not in {
+                        "amount", "category", "sub_category", "expense_date",
+                        "merchant_vendor", "purpose_description", "currency",
+                        "amount_usd", "receipt_attached", "status",
+                    }
+                },
+            )
+        # The totals trigger wrote behind the session; re-read so assertions see the roll-ups.
+        repository.refresh_totals(claim)
 
         for target, role in routes[status]:
             repository.transition_status(

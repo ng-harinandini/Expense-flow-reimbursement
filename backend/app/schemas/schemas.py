@@ -113,40 +113,48 @@ MoneyAmount = Annotated[Decimal, Field(gt=0, max_digits=14, decimal_places=2)]
 _FUTURE_DATE_GRACE_DAYS = 1
 
 
-class ExpenseClaimCreateSchema(BaseModel):
-    """Request body for ``POST /claims`` (create + submit).
+class ExpenseItemCreateSchema(BaseModel):
+    """One expense line of ``POST /claims``.
 
-    Shape validation only — anything needing the database (employee exists, duplicate, receipt
-    already claimed) is enforced by ``app.domain.validators`` inside the service.
+    Carries the expense facts plus the receipt payload the client received from
+    ``POST /expense-items/upload`` and is echoing back. Nothing here is trusted blindly: the
+    service re-resolves each field as *correction -> submitted -> extraction* and verifies that
+    ``fileUrl`` points at an object this employee uploaded.
 
-    ``employeeId`` is accepted for backwards compatibility but ignored: the owner is always bound
-    to the authenticated identity so a caller cannot file a claim against someone else.
+    ``amount`` and ``merchantVendor`` may be omitted **only** when the extraction supplies them —
+    the service raises a field-level error if neither source has a value.
     """
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
-    employeeId: Optional[str] = Field(
-        default=None, deprecated="Ignored — the claim owner is taken from the access token."
-    )
     category: Optional[str] = Field(default="Misc / Other", max_length=64)
     subCategory: Optional[str] = Field(default="General Expense", max_length=120)
-    amount: MoneyAmount
-    currency: Optional[str] = Field(default="USD", min_length=3, max_length=3)
+    amount: Optional[MoneyAmount] = None
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
     amountUSD: Optional[MoneyAmount] = None
-    merchantVendor: str = Field(min_length=1, max_length=200)
+    merchantVendor: Optional[str] = Field(default=None, max_length=200)
     expenseDate: Optional[date] = None
     purposeDescription: Optional[str] = ""
     attendees: Optional[str] = Field(default=None, max_length=4000)
     tripLog: Optional[Union[str, Dict[str, Any]]] = None
     hasPreApproval: Optional[bool] = False
     preApprovalDocRef: Optional[str] = Field(default=None, max_length=200)
-    receiptAttached: Optional[bool] = True
-    receiptUrl: Optional[str] = None
-    receiptId: Optional[str] = Field(
-        default=None, description="Id of an uploaded receipt to attach (must be unclaimed)."
-    )
-    extractedReceipt: Optional[ReceiptDataSchema] = None
     fxRate: Optional[Decimal] = Field(default=None, gt=0)
+
+    # --- receipt, echoed back from the upload response ---
+    receiptAttached: Optional[bool] = None
+    fileUrl: Optional[str] = None
+    fileName: Optional[str] = None
+    mimeType: Optional[str] = Field(default=None, max_length=200)
+    fileSizeBytes: Optional[int] = Field(default=None, ge=0)
+    fileHash: Optional[str] = Field(default=None, min_length=64, max_length=64)
+    ocrSource: Optional[str] = Field(default=None, max_length=32)
+    ocrConfidence: Optional[Dict[str, Any]] = None
+    ocrExtractedJson: Optional[Dict[str, Any]] = None
+    #: Only the fields the employee edited away from the extraction's guess.
+    employeeCorrectedData: Optional[Dict[str, Any]] = None
+    #: Historical alias for ``ocrExtractedJson``.
+    extractedReceipt: Optional[ReceiptDataSchema] = None
 
     @field_validator("currency")
     @classmethod
@@ -166,10 +174,50 @@ class ExpenseClaimCreateSchema(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _default_amount_usd(self) -> "ExpenseClaimCreateSchema":
-        """Single-currency claims need no conversion: USD total defaults to the amount."""
-        if self.amountUSD is None:
+    def _default_amount_usd(self) -> "ExpenseItemCreateSchema":
+        """Single-currency items need no conversion: USD amount defaults to the amount."""
+        if self.amountUSD is None and self.amount is not None:
             self.amountUSD = self.amount
+        return self
+
+
+class ExpenseClaimCreateSchema(BaseModel):
+    """Request body for ``POST /claims`` (create + submit) — a report header plus its items.
+
+    Shape validation only — anything needing the database (employee exists, duplicate, receipt
+    ownership) is enforced by ``app.domain.validators`` inside the service.
+
+    ``employeeId`` is accepted for backwards compatibility but ignored: the owner is always bound
+    to the authenticated identity so a caller cannot file a claim against someone else.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    employeeId: Optional[str] = Field(
+        default=None, deprecated="Ignored — the claim owner is taken from the access token."
+    )
+    title: Optional[str] = Field(default=None, max_length=200)
+    purpose: Optional[str] = None
+    fromDate: Optional[date] = None
+    toDate: Optional[date] = None
+    currency: Optional[str] = Field(default="USD", min_length=3, max_length=3)
+    #: At least one item — a claim with none would roll up to nothing and never resolve.
+    items: List[ExpenseItemCreateSchema] = Field(min_length=1)
+
+    @field_validator("currency")
+    @classmethod
+    def _iso_currency(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        code = value.strip().upper()
+        if len(code) != 3 or not code.isalpha():
+            raise ValueError("must be a 3-letter ISO 4217 currency code")
+        return code
+
+    @model_validator(mode="after")
+    def _dates_ordered(self) -> "ExpenseClaimCreateSchema":
+        if self.fromDate and self.toDate and self.toDate < self.fromDate:
+            raise ValueError("'toDate' cannot be earlier than 'fromDate'")
         return self
 
 
@@ -209,6 +257,27 @@ class ExpenseClaimUpdateSchema(BaseModel):
         if value is not None and (value - date.today()).days > _FUTURE_DATE_GRACE_DAYS:
             raise ValueError("cannot be in the future")
         return value
+
+
+class ItemDecisionRequestSchema(BaseModel):
+    """Request body for ``POST /claims/{id}/items/{item_id}/decision``.
+
+    Decides one expense line. The claim's own status is re-derived afterwards and only moves once
+    every item has an outcome — see ``ClaimService._roll_up_after_decisions``.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    action: str = Field(
+        pattern="^(approve|reject)$", description="approve or reject this item."
+    )
+    #: Required when rejecting — a rejection without a reason is not actionable by the employee.
+    notes: Optional[str] = Field(default=None, max_length=4000)
+    expectedVersion: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="The item's version, echoed back for optimistic-concurrency protection.",
+    )
 
 
 class ActionRequestSchema(BaseModel):
@@ -444,57 +513,42 @@ class RefineIamRequestSchema(BaseModel):
     useCaseDescription: Optional[str] = "AWS Step Functions + Lambda + Textract"
 
 
-# --- Receipts domain (S3 + Textract + PostgreSQL) ---
+# --- Receipt upload / extraction (S3 + Textract, no persistence) ---
 
-class ReceiptFieldSchema(BaseModel):
-    fieldType: Optional[str] = None
-    fieldLabel: Optional[str] = None
-    fieldValue: Optional[str] = None
-    confidence: Optional[float] = None
+class ReceiptExtractionSchema(BaseModel):
+    """200 response for ``POST /expense-items/upload``.
 
+    Deliberately **not** a persisted entity: no claim and no expense item exists yet. The client
+    holds this payload and echoes the ``file*``/``ocr*`` fields back inside an item of
+    ``POST /claims``, which is where the row is finally written.
 
-class ReceiptLineItemDetailSchema(BaseModel):
-    lineNumber: Optional[int] = None
-    description: Optional[str] = None
-    quantity: Optional[float] = None
-    unitPrice: Optional[float] = None
-    amount: Optional[float] = None
-    raw: Optional[dict] = None
+    There is no ``s3Bucket``/``s3Key``/``s3Region``: the bucket and region are server settings and
+    the object key is recovered from ``fileUrl`` — which is also what the submit path checks to
+    confirm the caller uploaded the document it is attaching.
+    """
 
-
-class ReceiptS3LocationSchema(BaseModel):
-    bucket: Optional[str] = None
-    key: Optional[str] = None
-    region: Optional[str] = None
-
-
-class ReceiptSummarySchema(BaseModel):
-    """Summary-level view returned by the list endpoint."""
-    id: str
+    # --- stored-file provenance the client echoes back verbatim ---
+    fileUrl: Optional[str] = None
     fileName: str
-    contentType: Optional[str] = None
+    mimeType: Optional[str] = None
     fileSizeBytes: Optional[int] = None
-    employeeId: Optional[str] = None
-    extractionStatus: str
-    extractionSource: Optional[str] = None
-    vendorName: Optional[str] = None
-    transactionDate: Optional[str] = None
-    totalAmount: Optional[float] = None
-    currency: Optional[str] = None
-    s3: Optional[ReceiptS3LocationSchema] = None
-    createdAt: Optional[str] = None
-    updatedAt: Optional[str] = None
+    #: SHA-256 hex, computed server-side. Drives duplicate-receipt detection.
+    fileHash: str
 
+    # --- extraction ---
+    ocrSource: str
+    #: Per-field confidences on a 0-100 scale, e.g. ``{"vendor": 98.2, "total": 99.1}``.
+    ocrConfidence: Optional[Dict[str, float]] = None
+    #: Verbatim extractor output -> ``expense_items.ocr_extracted_json``.
+    extraction: Optional[Dict[str, Any]] = None
 
-class ReceiptDetailSchema(ReceiptSummarySchema):
-    """Full record including raw Textract JSON, fields and line items."""
-    rawTextract: Optional[dict] = None
-    normalizedExtraction: Optional[dict] = None
+    # --- prefill the client may present as editable defaults ---
+    suggestedVendor: Optional[str] = None
+    suggestedDate: Optional[str] = None
+    suggestedAmount: Optional[float] = None
+    suggestedCurrency: Optional[str] = None
+    suggestedCategory: Optional[str] = None
+
+    # --- advisory, never blocking ---
+    duplicateOfClaimNumber: Optional[str] = None
     errorMessage: Optional[str] = None
-    fields: List[ReceiptFieldSchema] = []
-    lineItems: List[ReceiptLineItemDetailSchema] = []
-
-
-class ReceiptUploadResponseSchema(ReceiptDetailSchema):
-    """201 response for POST /receipts/upload (same shape as detail)."""
-    pass

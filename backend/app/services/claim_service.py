@@ -20,7 +20,7 @@ this phase moves state into the database, it does not change policy.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional, Protocol, Sequence, runtime_checkable
 
@@ -29,7 +29,15 @@ from app.core.logging import get_logger
 from app.domain import validators
 from app.domain.actor import Actor
 from app.domain.claim_state_machine import SYSTEM_ROLE
-from app.domain.errors import ForbiddenError, NotFoundError, ValidationError
+from app.domain.errors import (
+    ConcurrentUpdateError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationError,
+)
+from sqlalchemy import func, select
+
+from app.models.category import ExpenseCategory
 from app.models.claim import Claim
 from app.models.enums import (
     ApprovalStepStatus,
@@ -37,17 +45,19 @@ from app.models.enums import (
     AuditAction,
     AuditEntity,
     ClaimStatus,
+    ExpenseItemStatus,
     FraudRiskLevel,
 )
+from app.models.expense_item import ExpenseItem
 from app.models.organization import Employee
 from app.repositories.claim_repository import ClaimQuery, ClaimRepository
 from app.repositories.fraud_repository import FraudResultRepository
-from app.repositories.receipt_repository import ReceiptRepository
 from app.repositories.workflow_repository import ApprovalWorkflowRepository
+from app.services import receipt_extraction
 from app.services.audit_service import AuditService
 from app.services.employee_service import EmployeeService
 from app.services.fraud_engine import screen_for_anomalies
-from app.services.mappers import claim_to_engine_input, claims_to_engine_corpus
+from app.services.mappers import item_to_engine_input, items_to_engine_corpus
 from app.services.policy_engine import evaluate_expense_policy
 from app.services.policy_rule_service import PolicyRuleService
 
@@ -120,6 +130,7 @@ class DuplicateDetectionRecorder(Protocol):
         currency: str,
         *,
         invoice_number: Optional[str] = None,
+        checksum_sha256: Optional[str] = None,
     ) -> object:
         ...
 
@@ -133,7 +144,6 @@ class ClaimService:
         claim_repository: ClaimRepository,
         fraud_repository: FraudResultRepository,
         workflow_repository: ApprovalWorkflowRepository,
-        receipt_repository: ReceiptRepository,
         employee_service: EmployeeService,
         policy_rule_service: PolicyRuleService,
         audit_service: AuditService,
@@ -143,7 +153,6 @@ class ClaimService:
         self._claims = claim_repository
         self._fraud = fraud_repository
         self._workflows = workflow_repository
-        self._receipts = receipt_repository
         self._employees = employee_service
         self._policies = policy_rule_service
         self._audit = audit_service
@@ -170,33 +179,41 @@ class ClaimService:
             )
 
     def _scan_duplicates(self, claim: Claim) -> None:
-        """Best-effort advisory duplicate scan. Never raises: a duplicate-detection failure must
-        not fail the claim transaction it is merely observing, and its result can never change the
-        claim's status — the existing deterministic block in
-        ``ClaimRepository.find_duplicate_claims`` (see ``_build_draft``) is the only thing that can
-        refuse a resubmission. This only *logs* a flag for a human to weigh, catching patterns
-        (cross-employee, multi-receipt splits) that check structurally cannot see.
+        """Best-effort advisory duplicate scan, once per item.
+
+        Never raises: a duplicate-detection failure must not fail the claim transaction it is
+        merely observing, and its result can never change the claim's status — the deterministic
+        block in ``ClaimRepository.find_duplicate_items`` (see ``_build_item``) is the only thing
+        that can refuse a resubmission. This only *logs* a flag for a human to weigh, catching
+        patterns (cross-employee, split receipts) the structural check cannot see.
+
+        ``file_hash`` is passed through so the scanner can populate
+        ``ai_claim_fingerprints.checksum_sha256`` — the column has always existed but nothing fed
+        it, because the pre-split pipeline never had the receipt bytes to hand.
         """
         if self._duplicate_detection is None:
             return
-        try:
-            report = self._duplicate_detection.scan_claim(
-                claim.id, claim.employee_id, claim.merchant_vendor, claim.expense_date,
-                claim.amount_usd, claim.currency,
-            )
-            verdict = getattr(getattr(report, "verdict", None), "value", None)
-            if verdict in ("LIKELY", "CONFIRMED"):
-                logger.warning(
-                    "claim.duplicate_scan_flagged",
-                    extra={
-                        "claimId": str(claim.id), "verdict": verdict,
-                        "score": getattr(report, "score", None),
-                    },
+        for item in claim.items:
+            try:
+                report = self._duplicate_detection.scan_claim(
+                    claim.id, claim.employee_id, item.merchant_vendor, item.expense_date,
+                    item.amount_usd, item.currency, checksum_sha256=item.file_hash,
                 )
-        except Exception:
-            logger.warning(
-                "claim.duplicate_scan_failed", extra={"claimId": str(claim.id)}, exc_info=True
-            )
+                verdict = getattr(getattr(report, "verdict", None), "value", None)
+                if verdict in ("LIKELY", "CONFIRMED"):
+                    logger.warning(
+                        "claim.duplicate_scan_flagged",
+                        extra={
+                            "claimId": str(claim.id), "lineNumber": item.line_number,
+                            "verdict": verdict, "score": getattr(report, "score", None),
+                        },
+                    )
+            except Exception:
+                logger.warning(
+                    "claim.duplicate_scan_failed",
+                    extra={"claimId": str(claim.id), "lineNumber": item.line_number},
+                    exc_info=True,
+                )
 
     # --- reads ---------------------------------------------------------------
 
@@ -287,26 +304,29 @@ class ClaimService:
         # Submitted → Processing → routed (machine-driven)
         self._process(claim, actor=actor)
 
+        categories = ", ".join(sorted({i.category for i in claim.items}))
         self._audit.record(
             actor=actor,
             action=AuditAction.SUBMIT_CLAIM,
             entity_type=AuditEntity.CLAIM,
             entity_id=claim.claim_number,
             details=(
-                f"Submitted claim for {claim.currency} {claim.amount_usd:.2f} "
-                f"({claim.category}) -> Route: {claim.status.value}"
+                f"Submitted claim with {len(claim.items)} item(s) for "
+                f"{claim.currency} {claim.total_amount_usd:.2f} "
+                f"({categories}) -> Route: {claim.status.value}"
             ),
             after={
                 "claimId": str(claim.id),
                 "status": claim.status.value,
-                "amountUsd": str(claim.amount_usd),
-                "category": claim.category,
+                "totalAmountUsd": str(claim.total_amount_usd),
+                "itemCount": len(claim.items),
+                "itemStatuses": [i.status.value for i in claim.items],
             },
         )
         self._remember(
             DecisionMemoryKind.CLAIM, claim.id,
-            f"Claim {claim.claim_number}: {claim.currency} {claim.amount_usd:.2f} "
-            f"({claim.category}) from {claim.merchant_vendor}, submitted by {actor.name}. "
+            f"Claim {claim.claim_number}: {claim.currency} {claim.total_amount_usd:.2f} "
+            f"across {len(claim.items)} item(s) ({categories}), submitted by {actor.name}. "
             f"Routed to {claim.status.value}.",
             actor=actor,
         )
@@ -318,109 +338,199 @@ class ClaimService:
     def _build_draft(
         self, payload: dict[str, Any], *, employee: Employee, actor: Actor
     ) -> Claim:
-        """Validate the request and insert the ``Draft`` row it describes."""
-        validators.require_fields(payload, ("amount", "merchantVendor"))
+        """Validate the request and insert the ``Draft`` header plus its items.
 
-        amount = validators.validate_amount(payload.get("amount"), field="amount")
-        amount_usd = (
-            validators.validate_amount(payload["amountUSD"], field="amountUSD")
-            if payload.get("amountUSD") is not None
-            else amount
-        )
-        currency = validators.validate_currency(payload.get("currency"))
-        expense_date = validators.validate_expense_date(
-            self._coerce_date(payload.get("expenseDate")) or date.today()
-        )
-        category = (payload.get("category") or "Misc / Other").strip()
-        attendees = validators.validate_attendees(
-            payload.get("attendees"), required=category in ATTENDEE_REQUIRED_CATEGORIES
-        )
-        merchant_vendor = str(payload["merchantVendor"]).strip()
-
-        # Hard-block an exact resubmission before writing anything.
-        validators.require_no_duplicate(
-            self._claims.find_duplicate_claims(
-                employee_id=employee.id,
-                merchant_vendor=merchant_vendor,
-                expense_date=expense_date,
-                amount_usd=amount_usd,
+        The header carries only report-level facts; every expense fact is validated and written by
+        :meth:`_build_item`. A claim with no items would roll up to nothing and sit in ``Submitted``
+        forever, so an empty ``items`` list is rejected before anything is written.
+        """
+        items_payload = payload.get("items")
+        if not isinstance(items_payload, list) or not items_payload:
+            raise ValidationError(
+                "A claim must contain at least one expense item.",
+                details={"field": "items"},
             )
-        )
 
-        receipt_id = self._resolve_receipt(payload.get("receiptId"), employee=employee)
+        currency = validators.validate_currency(payload.get("currency"))
+        from_date = self._coerce_date(payload.get("fromDate"))
+        to_date = self._coerce_date(payload.get("toDate"))
+        if from_date and to_date and to_date < from_date:
+            raise ValidationError(
+                "'toDate' cannot be earlier than 'fromDate'.",
+                details={"field": "toDate"},
+            )
 
         claim = Claim(
             claim_number=self._claims.next_claim_number(),
             employee_id=employee.id,
-            # Snapshot: a later promotion must not re-judge a historical claim.
+            # Snapshot: a later promotion must not re-judge a historical claim. The policy engine
+            # reads it per item, from here.
             employee_grade=employee.grade,
-            expense_date=expense_date,
-            category=category,
-            sub_category=(payload.get("subCategory") or "General Expense").strip(),
-            amount=amount,
+            title=(payload.get("title") or "").strip() or None,
+            purpose=(payload.get("purpose") or "").strip() or None,
+            from_date=from_date,
+            to_date=to_date,
             currency=currency,
-            amount_usd=amount_usd,
-            fx_rate=self._coerce_decimal(payload.get("fxRate")),
-            merchant_vendor=merchant_vendor,
-            purpose_description=(payload.get("purposeDescription") or "").strip(),
-            attendees=attendees,
-            trip_log=payload.get("tripLog"),
-            has_pre_approval=bool(payload.get("hasPreApproval", False)),
-            pre_approval_doc_ref=payload.get("preApprovalDocRef"),
-            receipt_attached=bool(payload.get("receiptAttached", False)),
-            receipt_url=payload.get("receiptUrl"),
-            receipt_id=receipt_id,
-            extracted_receipt=payload.get("extractedReceipt"),
         )
 
         self._claims.create_claim(
             claim, actor_sub=actor.sub, actor_name=actor.name, actor_role=actor.role
         )
 
-        if receipt_id is not None:
-            receipt = self._receipts.get(receipt_id)
-            if receipt is not None:
-                self._claims.add_attachment(
-                    claim,
-                    file_name=receipt.file_name,
-                    kind=AttachmentKind.RECEIPT,
-                    receipt_id=receipt.id,
-                    content_type=receipt.content_type,
-                    file_size_bytes=receipt.file_size_bytes,
-                    s3_bucket=receipt.s3_bucket,
-                    s3_key=receipt.s3_key,
-                    s3_region=receipt.s3_region,
-                    uploaded_by_sub=actor.sub,
-                )
+        for index, item_payload in enumerate(items_payload, start=1):
+            self._build_item(
+                item_payload,
+                claim=claim,
+                line_number=index,
+                employee=employee,
+                actor=actor,
+                default_currency=currency,
+            )
+
+        # The totals trigger wrote to ``claims`` outside the unit of work; re-read so the header
+        # reflects the items just inserted.
+        self._claims.refresh_totals(claim)
 
         self._audit.record(
             actor=actor,
             action=AuditAction.CLAIM_CREATE,
             entity_type=AuditEntity.CLAIM,
             entity_id=claim.claim_number,
-            details=f"Created draft claim {claim.claim_number} for {employee.employee_code}.",
-            after={"claimId": str(claim.id), "status": claim.status.value},
+            details=(
+                f"Created draft claim {claim.claim_number} with {len(items_payload)} item(s) "
+                f"for {employee.employee_code}."
+            ),
+            after={
+                "claimId": str(claim.id),
+                "status": claim.status.value,
+                "itemCount": len(items_payload),
+            },
         )
         return claim
 
-    def _resolve_receipt(
-        self, receipt_id: Optional[str], *, employee: Employee
-    ) -> Optional[uuid.UUID]:
-        """Validate an attached receipt: it must exist, be the employee's, and be unclaimed."""
-        if not receipt_id:
-            return None
+    def _build_item(
+        self,
+        payload: dict[str, Any],
+        *,
+        claim: Claim,
+        line_number: int,
+        employee: Employee,
+        actor: Actor,
+        default_currency: str,
+    ) -> ExpenseItem:
+        """Validate one expense line and append it to ``claim``.
 
-        try:
-            parsed = uuid.UUID(str(receipt_id))
-        except (ValueError, TypeError):
+        Field values are resolved *correction -> submitted -> extraction*: the employee's edit of
+        an OCR guess wins, then whatever they typed, then the raw extraction. Both JSON blobs are
+        stored unmodified so a reviewer can see what the AI said and what was changed.
+        """
+        if not isinstance(payload, dict):
             raise ValidationError(
-                "'receiptId' must be a valid UUID.", details={"field": "receiptId"}
+                f"Item {line_number} must be an object.",
+                details={"field": f"items[{line_number - 1}]"},
             )
 
-        receipt = validators.require_receipt(self._receipts.get(parsed), str(receipt_id))
-        validators.require_receipt_ownership(receipt, employee)
-        validators.require_receipt_unclaimed(parsed, self._receipts.claim_using(parsed))
-        return parsed
+        extracted = payload.get("ocrExtractedJson") or payload.get("extractedReceipt")
+        corrections = payload.get("employeeCorrectedData")
+        if corrections is not None and not isinstance(corrections, dict):
+            raise ValidationError(
+                "'employeeCorrectedData' must be an object.",
+                details={"field": "employeeCorrectedData"},
+            )
+
+        def resolve(field: str, *, extracted_key: Optional[str] = None):
+            return receipt_extraction.resolve_field(
+                extracted_key or field,
+                submitted=payload.get(field),
+                corrections=corrections,
+                extracted=extracted if isinstance(extracted, dict) else None,
+            )
+
+        raw_amount = resolve("amount", extracted_key="totalAmount")
+        raw_vendor = resolve("merchantVendor", extracted_key="vendorName")
+        if raw_amount is None or raw_vendor is None or not str(raw_vendor).strip():
+            missing = "amount" if raw_amount is None else "merchantVendor"
+            raise ValidationError(
+                f"Item {line_number} is missing '{missing}'.",
+                details={"field": missing, "lineNumber": line_number},
+            )
+
+        amount = validators.validate_amount(raw_amount, field="amount")
+        amount_usd = (
+            validators.validate_amount(payload["amountUSD"], field="amountUSD")
+            if payload.get("amountUSD") is not None
+            else amount
+        )
+        currency = validators.validate_currency(payload.get("currency") or default_currency)
+        expense_date = validators.validate_expense_date(
+            self._coerce_date(resolve("expenseDate", extracted_key="transactionDate"))
+            or date.today()
+        )
+        category = (payload.get("category") or "Misc / Other").strip()
+        attendees = validators.validate_attendees(
+            payload.get("attendees"), required=category in ATTENDEE_REQUIRED_CATEGORIES
+        )
+        merchant_vendor = str(raw_vendor).strip()
+
+        # The client echoes ``fileUrl`` back from the upload response, so verify the object it
+        # points at was uploaded by this employee before attaching it.
+        file_url = payload.get("fileUrl")
+        validators.require_receipt_ownership(file_url, employee)
+
+        # Hard-block an exact resubmission before writing anything.
+        validators.require_no_duplicate(
+            self._claims.find_duplicate_items(
+                employee_id=employee.id,
+                merchant_vendor=merchant_vendor,
+                expense_date=expense_date,
+                amount_usd=amount_usd,
+                exclude_claim_id=claim.id,
+            )
+        )
+
+        return self._claims.add_item(
+            claim,
+            line_number=line_number,
+            category_id=self._resolve_category_id(category),
+            category=category,
+            sub_category=(payload.get("subCategory") or "General Expense").strip(),
+            expense_date=expense_date,
+            merchant_vendor=merchant_vendor,
+            purpose_description=(payload.get("purposeDescription") or "").strip(),
+            attendees=attendees,
+            trip_log=payload.get("tripLog"),
+            amount=amount,
+            currency=currency,
+            amount_usd=amount_usd,
+            fx_rate=self._coerce_decimal(payload.get("fxRate")),
+            has_pre_approval=bool(payload.get("hasPreApproval", False)),
+            pre_approval_doc_ref=payload.get("preApprovalDocRef"),
+            receipt_attached=bool(payload.get("receiptAttached", bool(file_url))),
+            file_url=file_url,
+            file_name=payload.get("fileName"),
+            mime_type=payload.get("mimeType"),
+            file_size_bytes=payload.get("fileSizeBytes"),
+            file_hash=payload.get("fileHash"),
+            ocr_extracted_json=extracted,
+            employee_corrected_data=corrections,
+            ocr_source=payload.get("ocrSource"),
+            ocr_confidence=payload.get("ocrConfidence"),
+            created_by_sub=actor.sub,
+            updated_by_sub=actor.sub,
+        )
+
+    def _resolve_category_id(self, category: str) -> Optional[uuid.UUID]:
+        """Link the item to its reference row, when the category name is a known one.
+
+        ``None`` for anything unrecognized: ``expense_items.category`` (the text the policy engine
+        matches on) is authoritative, and an unfamiliar category must not block a submission.
+        """
+        row = self._claims.session.execute(
+            select(ExpenseCategory.id).where(
+                func.lower(ExpenseCategory.name) == category.strip().lower()
+            )
+        ).scalar_one_or_none()
+        return row
 
     def _process(self, claim: Claim, *, actor: Actor) -> Claim:
         """Submitted → Processing → routed. Evaluation and screening happen here."""
@@ -436,10 +546,36 @@ class ClaimService:
             action="Started automated policy and fraud evaluation",
         )
 
-        policy_report = self._evaluate_policy(claim)
-        fraud_report = self._screen_fraud(claim)
+        # One effective-dated ruleset for the whole claim, chosen by the earliest item date.
+        # Fetching per item would mean two lines of one report judged under different rule
+        # versions — surprising to a reviewer reading a single decision.
+        earliest = min((i.expense_date for i in claim.items), default=date.today())
+        rules = self._policies.rules_for_engine(earliest)
 
-        target = self._route(policy_report, fraud_report)
+        # The peer corpus is read once, then grown as each item is judged: without appending, the
+        # split-transaction check could not see that two items of *this* claim share a vendor and
+        # date. Catching that is the point of holding several receipts on one claim.
+        corpus = items_to_engine_corpus(
+            self._claims.list_items_for_employee(
+                claim.employee_id, exclude_claim_id=claim.id, limit=FRAUD_CORPUS_LIMIT
+            )
+        )
+
+        policy_reports: list[dict[str, Any]] = []
+        fraud_reports: list[dict[str, Any]] = []
+        for item in claim.items:
+            engine_input = item_to_engine_input(item, claim=claim)
+            policy_report = self._evaluate_item_policy(item, claim=claim, rules=rules)
+            fraud_report = self._screen_item_fraud(item, claim=claim, corpus=corpus)
+            item.status = self._route_item(policy_report, fraud_report)
+            policy_reports.append(policy_report)
+            fraud_reports.append(fraud_report)
+            corpus.append(engine_input)
+
+        self._record_claim_fraud_result(claim, fraud_reports)
+
+        target = self._roll_up_status(claim)
+        held = [i.line_number for i in claim.items if i.status != ExpenseItemStatus.AUTO_APPROVED]
         self._claims.transition_status(
             claim,
             target,
@@ -448,7 +584,10 @@ class ClaimService:
             actor_name=system.name,
             step_name="Routing Decision",
             action=f"Routed claim {claim.claim_number} to {target.value}",
-            notes=policy_report.get("reasoningSummary"),
+            notes=(
+                f"Items requiring attention: {held}" if held
+                else "All items cleared automatically."
+            ),
             outcome="SUCCESS" if target != ClaimStatus.FLAGGED_FRAUD else "WARNING",
         )
 
@@ -463,19 +602,23 @@ class ClaimService:
         )
         return claim
 
-    def _evaluate_policy(self, claim: Claim) -> dict[str, Any]:
-        """Run the category policy engine against the effective ruleset and snapshot the report."""
-        report = evaluate_expense_policy(
-            claim_to_engine_input(claim),
-            self._policies.rules_for_engine(claim.expense_date),
-        )
-        claim.policy_validation = report
+    def _evaluate_item_policy(
+        self, item: ExpenseItem, *, claim: Claim, rules: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Run the category policy engine over one item and snapshot the report on it.
+
+        The engine itself is unchanged — it has always judged a single expense. The report is
+        stored per item because the claim's roll-up is per item: a reviewer must be able to see
+        *which* line held the claim, not just that something did.
+        """
+        report = evaluate_expense_policy(item_to_engine_input(item, claim=claim), rules)
+        item.policy_validation = report
 
         self._claims.record_step(
             claim,
             actor_name="ExpenseFlow Policy Engine",
             actor_role="admin",
-            step_name="Policy Validation",
+            step_name=f"Policy Validation (item {item.line_number})",
             action=(
                 "Passed policy constraints"
                 if report.get("overallPassed")
@@ -486,46 +629,105 @@ class ClaimService:
         )
         return report
 
-    def _screen_fraud(self, claim: Claim) -> dict[str, Any]:
-        """Screen against the employee's claim history and persist the verdict."""
-        corpus = claims_to_engine_corpus(
-            self._claims.list_for_employee(
-                claim.employee_id, exclude_claim_id=claim.id, limit=FRAUD_CORPUS_LIMIT
-            )
-        )
-        report = screen_for_anomalies(claim_to_engine_input(claim), corpus)
+    def _screen_item_fraud(
+        self, item: ExpenseItem, *, claim: Claim, corpus: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Screen one item against the employee's expense history and record the verdict on it."""
+        report = screen_for_anomalies(item_to_engine_input(item, claim=claim), corpus)
 
-        self._fraud.record(
-            claim_id=claim.id,
-            risk_score=report["riskScore"],
-            risk_level=report["riskLevel"],
-            is_flagged=report["isFlagged"],
-            recommended_action=report["recommendedAction"],
-            rationale=report["rationale"],
-            flags=report["flags"],
-        )
+        item.fraud_risk_score = report["riskScore"]
+        item.fraud_risk_level = FraudRiskLevel.coerce(report["riskLevel"])
+        item.fraud_flags = report["flags"]
+        item.is_fraud_flagged = bool(report["isFlagged"])
 
         self._claims.record_step(
             claim,
             actor_name="ExpenseFlow Anomaly Engine",
             actor_role="admin",
-            step_name="Fraud Screening",
+            step_name=f"Fraud Screening (item {item.line_number})",
             action=f"Risk Score: {report['riskScore']}/100 ({report['riskLevel']})",
             notes=report["rationale"],
             outcome="FAILED" if report["isFlagged"] else "SUCCESS",
         )
         return report
 
+    def _record_claim_fraud_result(
+        self, claim: Claim, reports: list[dict[str, Any]]
+    ) -> None:
+        """Persist one aggregate ``fraud_results`` row for the claim.
+
+        The per-item detail lives on ``expense_items``; this row is still written because
+        ``ClaimQuery.risk_level`` joins ``fraud_results`` to serve ``GET /claims?riskLevel=HIGH``,
+        and ``claim_to_dict`` exposes ``fraudScreening`` from it. The claim inherits the
+        worst-scoring item, and each flag is tagged with the line it came from.
+        """
+        if not reports:
+            return
+
+        worst = max(reports, key=lambda r: r["riskScore"])
+        flags: list[dict[str, Any]] = []
+        for item, report in zip(claim.items, reports):
+            for flag in report.get("flags") or []:
+                flags.append({**flag, "lineNumber": item.line_number})
+
+        self._fraud.record(
+            claim_id=claim.id,
+            risk_score=worst["riskScore"],
+            risk_level=worst["riskLevel"],
+            is_flagged=any(r["isFlagged"] for r in reports),
+            recommended_action=worst["recommendedAction"],
+            rationale=worst["rationale"],
+            flags=flags,
+        )
+
     @staticmethod
-    def _route(policy_report: dict[str, Any], fraud_report: dict[str, Any]) -> ClaimStatus:
-        """Destination for a processed claim. Thresholds unchanged from the previous behaviour."""
+    def _route_item(
+        policy_report: dict[str, Any], fraud_report: dict[str, Any]
+    ) -> ExpenseItemStatus:
+        """Destination for one evaluated item. Thresholds unchanged from the claim-level routing."""
         if fraud_report["isFlagged"] and fraud_report["riskScore"] >= FRAUD_ROUTING_THRESHOLD:
-            return ClaimStatus.FLAGGED_FRAUD
+            return ExpenseItemStatus.FRAUD_FLAG
         if not policy_report.get("overallPassed"):
-            return ClaimStatus.MANAGER_REVIEW
+            return ExpenseItemStatus.POLICY_HOLD
         if policy_report.get("requiresManualReview"):
+            return ExpenseItemStatus.POLICY_HOLD
+        return ExpenseItemStatus.AUTO_APPROVED
+
+    @staticmethod
+    def _roll_up_status(claim: Claim) -> ClaimStatus:
+        """The claim's status, derived from its items. Fraud outranks a policy hold.
+
+        Total by construction: an empty item set or any unexpected mix lands on
+        ``MANAGER_REVIEW``. Never fall through to ``AUTO_APPROVED`` — the safe default when the
+        state is not understood is that a human looks at it.
+        """
+        statuses = {item.status for item in claim.items}
+        if ExpenseItemStatus.FRAUD_FLAG in statuses:
+            return ClaimStatus.FLAGGED_FRAUD
+        if ExpenseItemStatus.POLICY_HOLD in statuses:
             return ClaimStatus.MANAGER_REVIEW
-        return ClaimStatus.AUTO_APPROVED
+        if statuses == {ExpenseItemStatus.AUTO_APPROVED}:
+            return ClaimStatus.AUTO_APPROVED
+        return ClaimStatus.MANAGER_REVIEW
+
+    @staticmethod
+    def _roll_up_after_decisions(claim: Claim) -> Optional[ClaimStatus]:
+        """Target after per-item human decisions, or ``None`` while any item is still pending.
+
+        A claim resolves only once every item has an outcome: all rejected means the claim is
+        rejected, anything else means at least one item was approved and the claim is approved.
+        """
+        pending = {
+            ExpenseItemStatus.SUBMITTED,
+            ExpenseItemStatus.POLICY_HOLD,
+            ExpenseItemStatus.FRAUD_FLAG,
+        }
+        statuses = [item.status for item in claim.items]
+        if not statuses or any(s in pending for s in statuses):
+            return None
+        if all(s == ExpenseItemStatus.REJECTED for s in statuses):
+            return ClaimStatus.REJECTED
+        return ClaimStatus.APPROVED
 
     def _start_workflow(self, claim: Claim, routed_to: ClaimStatus) -> None:
         """Materialise the approval workflow that matches the routing outcome."""
@@ -594,8 +796,6 @@ class ClaimService:
 
         # Client-supplied version turns a lost race into 409 instead of a silent overwrite.
         if expected_version is not None and claim.version != expected_version:
-            from app.domain.errors import ConcurrentUpdateError
-
             raise ConcurrentUpdateError("Claim", claim.claim_number)
 
         validators.require_not_terminal(claim)
@@ -664,9 +864,11 @@ class ClaimService:
             # reviewer's free-text notes on an approval/rejection can carry exactly the kind of
             # internal-only reasoning that guard exists to keep out of a broadly retrievable
             # surface. Only structured, already-non-sensitive fields are recorded here.
+            categories = ", ".join(sorted({i.category for i in claim.items}))
             summary = (
-                f"Claim {claim.claim_number} ({claim.category}, {claim.currency} "
-                f"{claim.amount_usd:.2f}): {normalized} executed by {actor.role}. Status "
+                f"Claim {claim.claim_number} ({categories}, {claim.currency} "
+                f"{claim.total_amount_usd:.2f} across {claim.item_count} item(s)): "
+                f"{normalized} executed by {actor.role}. Status "
                 f"{before_status.value} -> {claim.status.value}."
             )
             self._remember(memory_kind, claim.id, summary, actor=actor)
@@ -842,12 +1044,119 @@ class ClaimService:
             )
         return self._claims.refresh(claim)
 
+    # --- per-item decisions --------------------------------------------------
+
+    def decide_item(
+        self,
+        identifier: str,
+        item_id: str,
+        *,
+        action: str,
+        actor: Actor,
+        notes: Optional[str] = None,
+        expected_version: Optional[int] = None,
+    ) -> Claim:
+        """Approve or reject a single expense item, then re-derive the claim's status.
+
+        The claim only moves once **every** item has an outcome — see
+        :meth:`_roll_up_after_decisions`. Status is still written exclusively through
+        ``transition_status``, so the state machine and the database guard both validate the edge.
+        """
+        claim = self.get_claim_for_actor(identifier, actor=actor)
+        validators.require_not_terminal(claim)
+
+        try:
+            parsed_id = uuid.UUID(str(item_id))
+        except (ValueError, TypeError):
+            raise ValidationError(
+                "'itemId' must be a valid UUID.", details={"field": "itemId"}
+            )
+
+        item = validators.require_expense_item(self._claims.get_item(parsed_id), str(item_id))
+        if item.claim_id != claim.id:
+            raise NotFoundError("ExpenseItem", str(item_id))
+
+        if expected_version is not None and item.version != expected_version:
+            raise ConcurrentUpdateError("ExpenseItem", item.id)
+
+        normalized = (action or "").strip().lower()
+        if normalized not in ("approve", "reject"):
+            raise ValidationError(
+                f"'{action}' is not a valid item action. Expected 'approve' or 'reject'.",
+                details={"field": "action", "allowed": ["approve", "reject"]},
+            )
+        if normalized == "reject" and not (notes or "").strip():
+            raise ValidationError(
+                "A rejection reason is required.", details={"field": "notes"}
+            )
+
+        decider = self._employees.find_actor_employee(actor)
+        before_status = item.status
+        item.status = (
+            ExpenseItemStatus.MANAGER_APPROVED
+            if normalized == "approve"
+            else ExpenseItemStatus.REJECTED
+        )
+        item.decided_at = datetime.now(timezone.utc)
+        item.decided_by_sub = actor.sub
+        item.decided_by_employee_id = decider.id if decider else None
+        item.decision_notes = notes
+        item.rejection_reason = notes if normalized == "reject" else None
+        item.updated_by_sub = actor.sub
+        self._claims.session.flush()
+
+        self._claims.record_step(
+            claim,
+            actor_name=actor.name,
+            actor_role=actor.role,
+            actor_sub=actor.sub,
+            step_name=f"Item Decision (item {item.line_number})",
+            action=f"{normalized.capitalize()}d item {item.line_number} ({item.category})",
+            notes=notes,
+            outcome="SUCCESS" if normalized == "approve" else "WARNING",
+        )
+        self._audit.record(
+            actor=actor,
+            action=AuditAction.EXPENSE_ITEM_DECISION,
+            entity_type=AuditEntity.EXPENSE_ITEM,
+            entity_id=str(item.id),
+            details=(
+                f"Item {item.line_number} of claim {claim.claim_number} "
+                f"{normalized}d by {actor.role}."
+            ),
+            before={"status": before_status.value},
+            after={
+                "status": item.status.value,
+                "claimId": str(claim.id),
+                "lineNumber": item.line_number,
+            },
+        )
+
+        target = self._roll_up_after_decisions(claim)
+        if target is not None and target != claim.status:
+            self._claims.transition_status(
+                claim,
+                target,
+                actor_role=actor.role,
+                actor_sub=actor.sub,
+                actor_name=actor.name,
+                step_name="Routing Decision",
+                action=f"All items decided; claim {claim.claim_number} -> {target.value}",
+                outcome="SUCCESS" if target != ClaimStatus.REJECTED else "WARNING",
+            )
+
+        return self._claims.refresh(claim)
+
     # --- draft editing -------------------------------------------------------
 
     def update_draft(
         self, identifier: str, *, changes: dict[str, Any], actor: Actor
     ) -> Claim:
-        """Edit an unsubmitted claim. Rejected once the claim has left ``Draft``."""
+        """Edit an unsubmitted claim's header. Rejected once the claim has left ``Draft``.
+
+        Only report-level fields live on the claim now; per-expense edits go through
+        :meth:`update_item`.
+        """
         claim = self.get_claim_for_actor(identifier, actor=actor)
         employee = self._employees.resolve_actor_employee(actor)
         if actor.role == "employee":
@@ -857,34 +1166,21 @@ class ClaimService:
         updates: dict[str, Any] = {}
         before: dict[str, Any] = {}
 
-        if "amount" in changes:
-            updates["amount"] = validators.validate_amount(changes["amount"], field="amount")
-            before["amount"] = str(claim.amount)
-        if "amountUSD" in changes:
-            updates["amount_usd"] = validators.validate_amount(
-                changes["amountUSD"], field="amountUSD"
-            )
-            before["amountUSD"] = str(claim.amount_usd)
         if "currency" in changes:
             updates["currency"] = validators.validate_currency(changes["currency"])
             before["currency"] = claim.currency
-        if "expenseDate" in changes:
-            updates["expense_date"] = validators.validate_expense_date(
-                self._coerce_date(changes["expenseDate"])
-            )
-            before["expenseDate"] = claim.expense_date.isoformat()
         for wire_name, column in (
-            ("category", "category"),
-            ("subCategory", "sub_category"),
-            ("merchantVendor", "merchant_vendor"),
-            ("purposeDescription", "purpose_description"),
-            ("attendees", "attendees"),
-            ("receiptUrl", "receipt_url"),
-            ("preApprovalDocRef", "pre_approval_doc_ref"),
+            ("title", "title"),
+            ("purpose", "purpose"),
         ):
             if wire_name in changes:
                 before[wire_name] = getattr(claim, column)
                 updates[column] = changes[wire_name]
+        for wire_name, column in (("fromDate", "from_date"), ("toDate", "to_date")):
+            if wire_name in changes:
+                existing = getattr(claim, column)
+                before[wire_name] = existing.isoformat() if existing else None
+                updates[column] = self._coerce_date(changes[wire_name])
 
         if not updates:
             raise ValidationError("No editable fields supplied.")

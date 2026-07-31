@@ -21,9 +21,9 @@ from app.api import (
     auth,
     aws,
     claims,
+    expense_items,
     health,
     policy_rules,
-    receipts,
     roles,
 )
 from app.core.config import settings
@@ -62,7 +62,7 @@ app.include_router(audit_logs.router, prefix=settings.API_PREFIX)
 app.include_router(ai.router, prefix=settings.API_PREFIX)
 app.include_router(aws.router, prefix=settings.API_PREFIX)
 app.include_router(health.router, prefix=settings.API_PREFIX)
-app.include_router(receipts.router, prefix=settings.API_PREFIX)
+app.include_router(expense_items.router, prefix=settings.API_PREFIX)
 app.include_router(auth.router, prefix=settings.API_PREFIX)
 app.include_router(admin_users.router, prefix=settings.API_PREFIX)
 app.include_router(ai_knowledge_api.router, prefix=settings.API_PREFIX)

@@ -19,6 +19,7 @@ from typing import Any, Optional, Sequence
 
 from app.models.audit import AuditLog
 from app.models.claim import Attachment, Claim, ClaimStatusHistory, Comment
+from app.models.expense_item import ExpenseItem
 from app.models.fraud import FraudResult
 from app.models.policy import PolicyRule
 from app.models.workflow import ApprovalStep, ApprovalWorkflow
@@ -79,7 +80,9 @@ def attachment_to_dict(attachment: Attachment) -> dict[str, Any]:
         "fileName": attachment.file_name,
         "contentType": attachment.content_type,
         "fileSizeBytes": attachment.file_size_bytes,
-        "receiptId": str(attachment.receipt_id) if attachment.receipt_id else None,
+        "expenseItemId": (
+            str(attachment.expense_item_id) if attachment.expense_item_id else None
+        ),
         "s3": (
             {
                 "bucket": attachment.s3_bucket,
@@ -90,6 +93,69 @@ def attachment_to_dict(attachment: Attachment) -> dict[str, Any]:
             else None
         ),
         "createdAt": _iso(attachment.created_at),
+    }
+
+
+def item_to_dict(item: ExpenseItem) -> dict[str, Any]:
+    """One expense item on the wire.
+
+    The per-expense key names are deliberately the ones ``claim_to_dict`` used to expose
+    (``expenseDate``, ``amountUSD``, ``merchantVendor``, ``policyValidation``, …) so a client moves
+    its existing expense component down a level rather than rewriting it.
+
+    ``fraudScreening`` is assembled from the item's four ``fraud_*`` columns into the same shape
+    :func:`fraud_result_to_dict` produces for the claim, so both levels read identically.
+    """
+    return {
+        "id": str(item.id),
+        "lineNumber": item.line_number,
+        "categoryId": str(item.category_id) if item.category_id else None,
+        "category": item.category,
+        "subCategory": item.sub_category,
+        "expenseDate": _iso_date(item.expense_date),
+        "merchantVendor": item.merchant_vendor,
+        "purposeDescription": item.purpose_description or "",
+        "attendees": item.attendees,
+        "tripLog": item.trip_log,
+        "amount": _float(item.amount),
+        "currency": item.currency,
+        "amountUSD": _float(item.amount_usd),
+        "fxRate": _float(item.fx_rate),
+        "hasPreApproval": item.has_pre_approval,
+        "preApprovalDocRef": item.pre_approval_doc_ref,
+        # --- receipt (inline) ---
+        "receiptAttached": item.receipt_attached,
+        "fileUrl": item.file_url,
+        "fileName": item.file_name,
+        "mimeType": item.mime_type,
+        "fileSizeBytes": item.file_size_bytes,
+        "fileHash": item.file_hash,
+        # ``extractedReceipt`` keeps its historical name; the correction layer is exposed beside it
+        # so a reviewer can see what the AI said *and* what the employee changed.
+        "extractedReceipt": item.ocr_extracted_json,
+        "employeeCorrectedData": item.employee_corrected_data,
+        "ocrSource": item.ocr_source,
+        "ocrConfidence": item.ocr_confidence,
+        # --- verdicts ---
+        "policyValidation": item.policy_validation,
+        "fraudScreening": (
+            {
+                "riskScore": item.fraud_risk_score,
+                "isFlagged": item.is_fraud_flagged,
+                "riskLevel": item.fraud_risk_level.value if item.fraud_risk_level else None,
+                "flags": item.fraud_flags or [],
+            }
+            if item.fraud_risk_score is not None
+            else None
+        ),
+        "status": item.status.value,
+        "decidedAt": _iso(item.decided_at),
+        "decisionNotes": item.decision_notes,
+        "rejectionReason": item.rejection_reason,
+        "createdAt": _iso(item.created_at),
+        "updatedAt": _iso(item.updated_at),
+        # Clients echo this back on item decisions for optimistic-concurrency protection.
+        "version": item.version,
     }
 
 
@@ -162,27 +228,22 @@ def claim_to_dict(claim: Claim, *, include_internal_comments: bool = True) -> di
         "employeeId": employee.employee_code if employee else None,
         "employeeName": employee.full_name if employee else None,
         "employeeGrade": claim.employee_grade.value,
-        "expenseDate": _iso_date(claim.expense_date),
         # Historically a date-only string; submission instant is exposed separately.
         "submissionDate": _iso_date(claim.submitted_at.date()) if claim.submitted_at else None,
         "submittedAt": _iso(claim.submitted_at),
-        "category": claim.category,
-        "subCategory": claim.sub_category,
-        "amount": _float(claim.amount),
+        # --- report header ---
+        "title": claim.title,
+        "purpose": claim.purpose,
+        "fromDate": _iso_date(claim.from_date),
+        "toDate": _iso_date(claim.to_date),
         "currency": claim.currency,
-        "amountUSD": _float(claim.amount_usd),
-        "fxRate": _float(claim.fx_rate),
-        "merchantVendor": claim.merchant_vendor,
-        "purposeDescription": claim.purpose_description or "",
-        "attendees": claim.attendees,
-        "tripLog": claim.trip_log,
-        "hasPreApproval": claim.has_pre_approval,
-        "preApprovalDocRef": claim.pre_approval_doc_ref,
-        "receiptAttached": claim.receipt_attached,
-        "receiptUrl": claim.receipt_url,
-        "receiptId": str(claim.receipt_id) if claim.receipt_id else None,
-        "extractedReceipt": claim.extracted_receipt,
-        "policyValidation": claim.policy_validation,
+        # Trigger-maintained roll-ups over ``items``.
+        "totalAmount": _float(claim.total_amount),
+        "totalAmountUSD": _float(claim.total_amount_usd),
+        "itemCount": claim.item_count,
+        # The per-expense fields moved here from the claim; the key names are unchanged so a
+        # client renders an item with the same component it used to render a claim.
+        "items": [item_to_dict(i) for i in claim.items],
         "fraudScreening": fraud_result_to_dict(fraud),
         "status": claim.status.value,
         "workflowHistory": [history_to_workflow_step(h) for h in claim.status_history],
@@ -208,36 +269,55 @@ def claim_to_dict(claim: Claim, *, include_internal_comments: bool = True) -> di
     }
 
 
-def claim_to_engine_input(claim: Claim) -> dict[str, Any]:
-    """The subset ``policy_engine`` / ``fraud_engine`` read, in their historical key names."""
-    employee = claim.employee
+def item_to_engine_input(
+    item: ExpenseItem, *, claim: Optional[Claim] = None
+) -> dict[str, Any]:
+    """The subset ``policy_engine`` / ``fraud_engine`` read, in their historical key names.
+
+    The engines are unchanged and still judge one expense at a time — what changed is that the
+    expense is now an item rather than the whole claim. Two details matter:
+
+      * ``id`` is the **item's** id. The fraud engine excludes ``c["id"] == current["id"]`` from
+        the comparison corpus; keyed on the claim, an item would exclude its own siblings and the
+        same-claim split-transaction check could never fire.
+      * ``status`` is the **item's** status, so the duplicate check's ``!= "Rejected"`` filter
+        means "this line was rejected", not "the whole report was".
+
+    ``employeeGrade`` and ``submissionDate`` still come from the parent claim: grade is a property
+    of the submission, not of the line.
+    """
+    parent = claim if claim is not None else item.claim
+    employee = parent.employee if parent else None
     return {
-        "id": str(claim.id),
-        "claimNumber": claim.claim_number,
+        "id": str(item.id),
+        "claimId": str(item.claim_id),
+        "claimNumber": parent.claim_number if parent else None,
+        "lineNumber": item.line_number,
         "employeeId": employee.employee_code if employee else None,
-        "employeeGrade": claim.employee_grade.value,
-        "expenseDate": _iso_date(claim.expense_date),
+        "employeeGrade": parent.employee_grade.value if parent else None,
+        "expenseDate": _iso_date(item.expense_date),
         "submissionDate": _iso_date(
-            claim.submitted_at.date() if claim.submitted_at else date.today()
+            parent.submitted_at.date() if parent and parent.submitted_at else date.today()
         ),
-        "category": claim.category,
-        "subCategory": claim.sub_category,
-        "amount": _float(claim.amount),
-        "currency": claim.currency,
-        "amountUSD": _float(claim.amount_usd),
-        "merchantVendor": claim.merchant_vendor,
-        "purposeDescription": claim.purpose_description or "",
-        "attendees": claim.attendees,
-        "hasPreApproval": claim.has_pre_approval,
-        "receiptAttached": claim.receipt_attached,
-        "extractedReceipt": claim.extracted_receipt,
-        "status": claim.status.value,
+        "category": item.category,
+        "subCategory": item.sub_category,
+        "amount": _float(item.amount),
+        "currency": item.currency,
+        "amountUSD": _float(item.amount_usd),
+        "merchantVendor": item.merchant_vendor,
+        "purposeDescription": item.purpose_description or "",
+        "attendees": item.attendees,
+        "hasPreApproval": item.has_pre_approval,
+        "receiptAttached": item.receipt_attached,
+        "extractedReceipt": item.ocr_extracted_json,
+        "fileHash": item.file_hash,
+        "status": item.status.value,
     }
 
 
-def claims_to_engine_corpus(claims: Sequence[Claim]) -> list[dict[str, Any]]:
-    """Peer claims for anomaly comparison, in the engine's dictionary shape."""
-    return [claim_to_engine_input(claim) for claim in claims]
+def items_to_engine_corpus(items: Sequence[ExpenseItem]) -> list[dict[str, Any]]:
+    """Peer expense items for anomaly comparison, in the engine's dictionary shape."""
+    return [item_to_engine_input(item) for item in items]
 
 
 # --- audit -------------------------------------------------------------------

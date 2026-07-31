@@ -23,7 +23,6 @@ from app.repositories.claim_repository import ClaimQuery, ClaimRepository  # noq
 from app.repositories.employee_repository import EmployeeRepository  # noqa: F401
 from app.repositories.fraud_repository import FraudResultRepository  # noqa: F401
 from app.repositories.policy_rule_repository import PolicyRuleRepository  # noqa: F401
-from app.repositories.receipt_repository import ReceiptRepository  # noqa: F401
 from app.repositories.role_repository import RoleRepository  # noqa: F401
 from app.repositories.workflow_repository import ApprovalWorkflowRepository  # noqa: F401
 
@@ -37,6 +36,5 @@ __all__ = [
     "EmployeeRepository",
     "FraudResultRepository",
     "PolicyRuleRepository",
-    "ReceiptRepository",
     "RoleRepository",
 ]

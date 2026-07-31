@@ -14,10 +14,10 @@ from app.domain.errors import (
     ForbiddenError,
     ImmutableEntityError,
     NotFoundError,
-    ReceiptAlreadyClaimedError,
     ValidationError,
 )
-from app.models.enums import ClaimStatus
+from app.models.enums import ClaimStatus, ExpenseItemStatus
+from app.services import receipt_extraction
 
 TODAY = date(2026, 7, 28)
 
@@ -32,6 +32,17 @@ def _claim(status: ClaimStatus = ClaimStatus.DRAFT, employee_id=1) -> SimpleName
         claim_number="EXP-2026-1001",
         status=status,
         employee_id=employee_id,
+    )
+
+
+def _item(status: ExpenseItemStatus = ExpenseItemStatus.SUBMITTED) -> SimpleNamespace:
+    """An expense item, with the parent claim attached — duplicate details read through it."""
+    return SimpleNamespace(
+        id="i-1",
+        claim_id="c-1",
+        claim=_claim(ClaimStatus.MANAGER_REVIEW),
+        line_number=1,
+        status=status,
         merchant_vendor="Vendor",
         expense_date=TODAY,
         amount_usd=Decimal("10.00"),
@@ -139,11 +150,11 @@ def test_require_employee_rejects_deactivated():
         validators.require_employee(_employee(active=False))
 
 
-def test_require_claim_and_receipt_missing():
+def test_require_claim_and_item_missing():
     with pytest.raises(NotFoundError):
         validators.require_claim(None, "EXP-1")
     with pytest.raises(NotFoundError):
-        validators.require_receipt(None, "r-1")
+        validators.require_expense_item(None, "i-1")
 
 
 # --- ownership ---------------------------------------------------------------
@@ -156,23 +167,6 @@ def test_claim_ownership_accepts_owner():
 def test_claim_ownership_rejects_other_employee():
     with pytest.raises(ForbiddenError, match="another employee"):
         validators.require_claim_ownership(_claim(employee_id=2), _employee(identity=1))
-
-
-def test_receipt_ownership_by_uuid_link():
-    receipt = SimpleNamespace(id="r-1", employee_ref_id=1, employee_id=None)
-    validators.require_receipt_ownership(receipt, _employee(identity=1))
-
-
-def test_receipt_ownership_by_external_code():
-    """Receipts uploaded before the employees table existed only carry the code."""
-    receipt = SimpleNamespace(id="r-1", employee_ref_id=None, employee_id="emp-101")
-    validators.require_receipt_ownership(receipt, _employee(identity=1, code="emp-101"))
-
-
-def test_receipt_ownership_rejects_other_employee():
-    receipt = SimpleNamespace(id="r-1", employee_ref_id=2, employee_id="emp-104")
-    with pytest.raises(ForbiddenError, match="another employee"):
-        validators.require_receipt_ownership(receipt, _employee(identity=1, code="emp-101"))
 
 
 # --- mutability --------------------------------------------------------------
@@ -219,23 +213,37 @@ def test_no_duplicates_passes():
     validators.require_no_duplicate([])
 
 
-def test_duplicate_reports_the_existing_claim():
+def test_duplicate_reports_the_existing_item():
     with pytest.raises(DuplicateClaimError) as raised:
-        validators.require_no_duplicate([_claim(ClaimStatus.MANAGER_REVIEW)])
+        validators.require_no_duplicate([_item()])
 
     details = raised.value.details
     assert details["existingClaimNumber"] == "EXP-2026-1001"
-    assert details["existingStatus"] == "Manager_Review"
+    assert details["lineNumber"] == 1
+    assert details["existingStatus"] == "Submitted"
 
 
-def test_unclaimed_receipt_passes():
-    validators.require_receipt_unclaimed("r-1", None)
+def test_receipt_ownership_accepts_the_uploader():
+    """The key embeds the uploader's id — that prefix is the whole ownership check."""
+    employee = SimpleNamespace(id="emp-uuid-1", employee_code="emp-101")
+    url = receipt_extraction.build_file_url(
+        receipt_extraction.build_object_key("emp-uuid-1", "upload-1", "receipt.png")
+    )
+    validators.require_receipt_ownership(url, employee)
 
 
-def test_already_claimed_receipt_rejected():
-    with pytest.raises(ReceiptAlreadyClaimedError) as raised:
-        validators.require_receipt_unclaimed("r-1", _claim())
-    assert raised.value.details["claimNumber"] == "EXP-2026-1001"
+def test_receipt_ownership_rejects_another_employees_object():
+    employee = SimpleNamespace(id="emp-uuid-2", employee_code="emp-102")
+    url = receipt_extraction.build_file_url(
+        receipt_extraction.build_object_key("emp-uuid-1", "upload-1", "receipt.png")
+    )
+    with pytest.raises(ForbiddenError, match="another employee"):
+        validators.require_receipt_ownership(url, employee)
+
+
+def test_receipt_ownership_allows_an_item_with_no_file():
+    """A manually entered item has no document, so there is nothing to own."""
+    validators.require_receipt_ownership(None, SimpleNamespace(id="emp-uuid-1"))
 
 
 # --- attendees ---------------------------------------------------------------

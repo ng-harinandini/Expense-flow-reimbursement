@@ -25,12 +25,12 @@ from app.domain.errors import (
     ForbiddenError,
     ImmutableEntityError,
     NotFoundError,
-    ReceiptAlreadyClaimedError,
     ValidationError,
 )
 from app.models.claim import Claim
+from app.models.expense_item import ExpenseItem
 from app.models.organization import Employee
-from app.models.receipt import Receipt
+from app.services import receipt_extraction
 
 #: Claims older than this need a written justification and Finance Director approval. The claim is
 #: still accepted — the policy engine flags it — because refusing the submission would leave the
@@ -65,10 +65,10 @@ def require_claim(claim: Optional[Claim], identifier: str) -> Claim:
     return claim
 
 
-def require_receipt(receipt: Optional[Receipt], identifier: str) -> Receipt:
-    if receipt is None:
-        raise NotFoundError("Receipt", identifier)
-    return receipt
+def require_expense_item(item: Optional[ExpenseItem], identifier: str) -> ExpenseItem:
+    if item is None:
+        raise NotFoundError("ExpenseItem", identifier)
+    return item
 
 
 # --- ownership -----------------------------------------------------------------
@@ -86,14 +86,20 @@ def require_claim_ownership(claim: Claim, employee: Employee) -> None:
         )
 
 
-def require_receipt_ownership(receipt: Receipt, employee: Employee) -> None:
-    """The receipt must have been uploaded by ``employee`` (by UUID link or external code)."""
-    owned_by_ref = receipt.employee_ref_id is not None and receipt.employee_ref_id == employee.id
-    owned_by_code = receipt.employee_id is not None and receipt.employee_id == employee.employee_code
-    if not (owned_by_ref or owned_by_code):
+def require_receipt_ownership(file_url: Optional[str], employee: Employee) -> None:
+    """The receipt object must have been uploaded by ``employee``.
+
+    The client holds the upload response and echoes ``file_url`` back at submit time, so without
+    this check a caller could attach a document uploaded by somebody else. ``expense_items`` has no
+    ``s3_key`` column to compare against — the employee segment embedded in the object key by
+    ``receipt_extraction.build_object_key`` is the only server-side evidence of ownership.
+    """
+    if file_url is None:
+        return
+    if not receipt_extraction.owns_object(file_url, str(employee.id)):
         raise ForbiddenError(
             "This receipt was uploaded by another employee.",
-            details={"receiptId": str(receipt.id)},
+            details={"fileUrl": file_url},
         )
 
 
@@ -190,40 +196,29 @@ def is_stale_claim(expense_date: date, *, on_date: Optional[date] = None) -> boo
 
 # --- duplicates & receipts -----------------------------------------------------
 
-def require_no_duplicate(duplicates: Sequence[Claim]) -> None:
+def require_no_duplicate(duplicates: Sequence[ExpenseItem]) -> None:
     """Reject a resubmission of an expense already on file.
 
     Distinct from the fraud engine's ``DUPLICATE_SUBMISSION`` flag: this blocks the write outright
     (409) so an exact double-submit — a double-tapped button, a retried request — never creates a
-    second claim. The fraud flag remains for the softer near-duplicate signals.
+    second item. The fraud flag remains for the softer near-duplicate signals.
     """
     if not duplicates:
         return
     existing = duplicates[0]
     raise DuplicateClaimError(
-        f"An equivalent claim already exists ({existing.claim_number}).",
+        f"An equivalent expense already exists on claim {existing.claim.claim_number}.",
         details={
-            "existingClaimId": str(existing.id),
-            "existingClaimNumber": existing.claim_number,
+            "existingClaimId": str(existing.claim_id),
+            "existingClaimNumber": existing.claim.claim_number,
+            "existingItemId": str(existing.id),
+            "lineNumber": existing.line_number,
             "existingStatus": existing.status.value,
             "merchantVendor": existing.merchant_vendor,
             "expenseDate": existing.expense_date.isoformat(),
             "amountUsd": str(existing.amount_usd),
         },
     )
-
-
-def require_receipt_unclaimed(receipt_id: uuid.UUID, existing_claim: Optional[Claim]) -> None:
-    """A receipt may back at most one claim."""
-    if existing_claim is not None:
-        raise ReceiptAlreadyClaimedError(
-            f"Receipt is already attached to claim {existing_claim.claim_number}.",
-            details={
-                "receiptId": str(receipt_id),
-                "claimId": str(existing_claim.id),
-                "claimNumber": existing_claim.claim_number,
-            },
-        )
 
 
 def validate_attendees(attendees: Optional[str], *, required: bool) -> Optional[str]:

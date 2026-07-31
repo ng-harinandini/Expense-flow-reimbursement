@@ -39,7 +39,6 @@ from app.repositories.claim_repository import ClaimRepository
 from app.repositories.employee_repository import EmployeeRepository
 from app.repositories.fraud_repository import FraudResultRepository
 from app.repositories.policy_rule_repository import PolicyRuleRepository
-from app.repositories.receipt_repository import ReceiptRepository
 from app.repositories.role_repository import RoleRepository
 from app.repositories.workflow_repository import ApprovalWorkflowRepository
 from app.services.audit_service import AuditService
@@ -181,10 +180,6 @@ def get_workflow_repository(db: Session = Depends(get_db)) -> ApprovalWorkflowRe
     return ApprovalWorkflowRepository(db)
 
 
-def get_receipt_repository(db: Session = Depends(get_db)) -> ReceiptRepository:
-    return ReceiptRepository(db)
-
-
 def get_ai_inference_repository(db: Session = Depends(get_db)) -> AIInferenceRepository:
     return AIInferenceRepository(db)
 
@@ -272,7 +267,6 @@ def get_claim_service(
     claim_repository: ClaimRepository = Depends(get_claim_repository),
     fraud_repository: FraudResultRepository = Depends(get_fraud_repository),
     workflow_repository: ApprovalWorkflowRepository = Depends(get_workflow_repository),
-    receipt_repository: ReceiptRepository = Depends(get_receipt_repository),
     employee_service: EmployeeService = Depends(get_employee_service),
     policy_rule_service: PolicyRuleService = Depends(get_policy_rule_service),
     audit_service: AuditService = Depends(get_audit_service),
@@ -285,7 +279,6 @@ def get_claim_service(
         claim_repository=claim_repository,
         fraud_repository=fraud_repository,
         workflow_repository=workflow_repository,
-        receipt_repository=receipt_repository,
         employee_service=employee_service,
         policy_rule_service=policy_rule_service,
         audit_service=audit_service,

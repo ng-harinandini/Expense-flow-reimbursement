@@ -21,10 +21,15 @@ from app.domain.errors import (
     ImmutableEntityError,
     InvalidStateTransitionError,
     NotFoundError,
-    ReceiptAlreadyClaimedError,
     ValidationError,
 )
-from app.models.enums import ApprovalStepStatus, ClaimStatus, FraudRiskLevel
+from app.models.enums import (
+    ApprovalStepStatus,
+    ClaimStatus,
+    ExpenseItemStatus,
+    FraudRiskLevel,
+)
+from app.services import receipt_extraction
 
 
 def _audit_actions(repositories, claim_number: str) -> list[str]:
@@ -279,66 +284,203 @@ def test_failed_submission_leaves_no_partial_claim(
 # --- receipts ----------------------------------------------------------------
 
 
-@pytest.fixture
-def receipt(db_session, employee):
-    from app.models.receipt import ExtractionStatus, Receipt
-
-    row = Receipt(
-        file_name="receipt.png", extraction_status=ExtractionStatus.COMPLETED,
-        employee_id=employee.employee_code, employee_ref_id=employee.id,
-        vendor_name="Sweetgreen SF", total_amount=Decimal("22.50"), currency="USD",
+def _receipt_url(employee_id: str) -> str:
+    return receipt_extraction.build_file_url(
+        receipt_extraction.build_object_key(employee_id, str(uuid.uuid4()), "receipt.png")
     )
-    db_session.add(row)
-    db_session.flush()
-    return row
 
 
-def test_attaching_a_receipt_links_it_and_creates_an_attachment(
-    claim_service, claim_payload, employee_actor, receipt
+def test_receipt_payload_is_stored_on_the_item(
+    claim_service, claim_payload, employee_actor, employee
 ):
+    url = _receipt_url(str(employee.id))
     claim = claim_service.submit_claim(
-        claim_payload(receiptId=str(receipt.id)), actor=employee_actor
+        claim_payload(fileUrl=url, fileName="receipt.png", fileHash="c" * 64),
+        actor=employee_actor,
     )
-    assert claim.receipt_id == receipt.id
-    assert any(a.receipt_id == receipt.id for a in claim.attachments)
+    item = claim.items[0]
+    assert item.file_url == url
+    assert item.file_hash == "c" * 64
+    assert item.receipt_attached is True
 
 
-def test_a_receipt_cannot_back_two_claims(claim_service, claim_payload, employee_actor, receipt):
-    claim_service.submit_claim(claim_payload(receiptId=str(receipt.id)), actor=employee_actor)
-    with pytest.raises(ReceiptAlreadyClaimedError):
+def test_cannot_attach_another_employees_receipt(
+    claim_service, claim_payload, employee_actor, other_employee
+):
+    """The client echoes ``fileUrl`` back, so ownership is re-checked at submit time."""
+    with pytest.raises(ForbiddenError, match="another employee"):
         claim_service.submit_claim(
-            claim_payload(receiptId=str(receipt.id), merchantVendor="Another Vendor"),
+            claim_payload(fileUrl=_receipt_url(str(other_employee.id))),
             actor=employee_actor,
         )
 
 
-def test_unknown_receipt_is_rejected(claim_service, claim_payload, employee_actor):
-    with pytest.raises(NotFoundError):
+# --- corrections -------------------------------------------------------------
+
+
+def test_employee_correction_wins_over_the_extraction(
+    claim_service, claim_payload, employee_actor
+):
+    """The engines judge the corrected value; the raw extraction is preserved untouched."""
+    extraction = {"vendorName": "SWEETGREEN #402 SF", "totalAmount": 22.50}
+    claim = claim_service.submit_claim(
+        claim_payload(
+            merchantVendor=None,
+            amount=None,
+            ocrExtractedJson=extraction,
+            employeeCorrectedData={"vendorName": "Sweetgreen"},
+        ),
+        actor=employee_actor,
+    )
+    item = claim.items[0]
+    assert item.merchant_vendor == "Sweetgreen"
+    assert item.amount == Decimal("22.50")  # not corrected -> taken from the extraction
+    assert item.ocr_extracted_json == extraction  # byte-identical
+    assert item.employee_corrected_data == {"vendorName": "Sweetgreen"}
+
+
+def test_item_missing_amount_and_extraction_is_rejected(
+    claim_service, claim_payload, employee_actor
+):
+    with pytest.raises(ValidationError, match="amount"):
         claim_service.submit_claim(
-            claim_payload(receiptId=str(uuid.uuid4())), actor=employee_actor
+            claim_payload(amount=None, amountUSD=None), actor=employee_actor
         )
 
 
-def test_malformed_receipt_id_is_rejected(claim_service, claim_payload, employee_actor):
-    with pytest.raises(ValidationError, match="receiptId"):
-        claim_service.submit_claim(claim_payload(receiptId="not-a-uuid"), actor=employee_actor)
-
-
-def test_cannot_attach_another_employees_receipt(
-    claim_service, claim_payload, employee_actor, db_session, other_employee
-):
-    from app.models.receipt import ExtractionStatus, Receipt
-
-    foreign = Receipt(
-        file_name="theirs.png", extraction_status=ExtractionStatus.COMPLETED,
-        employee_id=other_employee.employee_code, employee_ref_id=other_employee.id,
-    )
-    db_session.add(foreign)
-    db_session.flush()
-
-    with pytest.raises(ForbiddenError, match="another employee"):
+def test_claim_with_no_items_is_rejected(claim_service, employee_actor):
+    with pytest.raises(ValidationError, match="at least one expense item"):
         claim_service.submit_claim(
-            claim_payload(receiptId=str(foreign.id)), actor=employee_actor
+            {"title": "Empty", "currency": "USD", "items": []}, actor=employee_actor
+        )
+
+
+# --- roll-up -----------------------------------------------------------------
+
+
+def test_all_clean_items_auto_approve_the_claim(
+    claim_service, claim_payload, employee_actor
+):
+    claim = claim_service.submit_claim(
+        claim_payload(extra_items=[claim_payload.item(amount=Decimal("18.00"))]),
+        actor=employee_actor,
+    )
+    assert claim.status is ClaimStatus.AUTO_APPROVED
+    assert [i.status for i in claim.items] == [
+        ExpenseItemStatus.AUTO_APPROVED,
+        ExpenseItemStatus.AUTO_APPROVED,
+    ]
+    assert claim.item_count == 2
+
+
+def test_one_policy_hold_sends_the_whole_claim_to_manager_review(
+    claim_service, claim_payload, employee_actor
+):
+    """A clean sibling does not rescue a claim: the held line decides."""
+    claim = claim_service.submit_claim(
+        claim_payload(
+            extra_items=[
+                claim_payload.item(
+                    category="Client Entertainment",
+                    amount=Decimal("900.00"),
+                    amountUSD=Decimal("900.00"),
+                    attendees="Client A, Client B",
+                )
+            ]
+        ),
+        actor=employee_actor,
+    )
+    assert claim.status is ClaimStatus.MANAGER_REVIEW
+    assert ExpenseItemStatus.AUTO_APPROVED in {i.status for i in claim.items}
+    assert ExpenseItemStatus.POLICY_HOLD in {i.status for i in claim.items}
+
+
+def test_totals_reflect_every_item(claim_service, claim_payload, employee_actor):
+    claim = claim_service.submit_claim(
+        claim_payload(
+            amount=Decimal("10.00"),
+            amountUSD=Decimal("10.00"),
+            extra_items=[
+                claim_payload.item(amount=Decimal("32.50"), amountUSD=Decimal("32.50"))
+            ],
+        ),
+        actor=employee_actor,
+    )
+    assert claim.total_amount == Decimal("42.50")
+    assert claim.item_count == 2
+
+
+def test_claim_resolves_only_after_every_item_is_decided(
+    claim_service, claim_payload, employee_actor, manager_actor
+):
+    """Per-item decisions roll up: the claim moves once nothing is pending."""
+    claim = claim_service.submit_claim(
+        claim_payload(
+            category="Client Entertainment",
+            amount=Decimal("900.00"),
+            amountUSD=Decimal("900.00"),
+            attendees="Client A",
+            extra_items=[
+                claim_payload.item(
+                    category="Client Entertainment",
+                    amount=Decimal("950.00"),
+                    amountUSD=Decimal("950.00"),
+                    attendees="Client B",
+                )
+            ],
+        ),
+        actor=employee_actor,
+    )
+    assert claim.status is ClaimStatus.MANAGER_REVIEW
+
+    first, second = claim.items
+    claim = claim_service.decide_item(
+        str(claim.id), str(first.id), action="approve", actor=manager_actor
+    )
+    # One item still pending -> the claim has not moved.
+    assert claim.status is ClaimStatus.MANAGER_REVIEW
+
+    claim = claim_service.decide_item(
+        str(claim.id), str(second.id), action="reject",
+        actor=manager_actor, notes="Over the entertainment cap.",
+    )
+    assert claim.status is ClaimStatus.APPROVED  # one survivor is enough
+
+
+def test_claim_is_rejected_when_every_item_is_rejected(
+    claim_service, claim_payload, employee_actor, manager_actor
+):
+    claim = claim_service.submit_claim(
+        claim_payload(
+            category="Client Entertainment",
+            amount=Decimal("900.00"),
+            amountUSD=Decimal("900.00"),
+            attendees="Client A",
+        ),
+        actor=employee_actor,
+    )
+    claim = claim_service.decide_item(
+        str(claim.id), str(claim.items[0].id), action="reject",
+        actor=manager_actor, notes="Not reimbursable.",
+    )
+    assert claim.status is ClaimStatus.REJECTED
+
+
+def test_rejecting_an_item_requires_a_reason(
+    claim_service, claim_payload, employee_actor, manager_actor
+):
+    claim = claim_service.submit_claim(
+        claim_payload(
+            category="Client Entertainment",
+            amount=Decimal("900.00"),
+            amountUSD=Decimal("900.00"),
+            attendees="Client A",
+        ),
+        actor=employee_actor,
+    )
+    with pytest.raises(ValidationError, match="rejection reason"):
+        claim_service.decide_item(
+            str(claim.id), str(claim.items[0].id), action="reject", actor=manager_actor
         )
 
 

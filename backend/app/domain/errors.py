@@ -107,12 +107,6 @@ class DuplicateClaimError(ConflictError):
     code = "duplicate_claim"
 
 
-class ReceiptAlreadyClaimedError(ConflictError):
-    """The receipt is already attached to another claim."""
-
-    code = "receipt_already_claimed"
-
-
 class ImmutableEntityError(ConflictError):
     """The entity has reached a state in which the requested field may no longer change."""
 
@@ -140,6 +134,5 @@ __all__ = [
     "ImmutableEntityError",
     "InvalidStateTransitionError",
     "NotFoundError",
-    "ReceiptAlreadyClaimedError",
     "ValidationError",
 ]

@@ -1,20 +1,27 @@
 """The claim aggregate: ``Claim`` plus its owned children.
 
-``Claim`` replaces the ``claims_store`` Python list. Everything the old dictionary carried is now
-either a typed column, a foreign key, or a child row:
+A claim is an **expense report header**, not an expense: it owns N :class:`~app.models.expense_item.ExpenseItem`
+rows, each with its own receipt, category, and verdict. Everything the aggregate carries is a typed
+column, a foreign key, or a child row:
 
-    old dict key        now
+    concept             now
     ----------------    ------------------------------------------------------------
+    the expenses        ``expense_items`` rows (amount, vendor, receipt, per-item verdict)
     workflowHistory     ``claim_status_history`` rows (+ ``approval_steps``)
     comments            ``comments`` rows
     fraudScreening      ``fraud_results`` rows (latest wins)
-    policyValidation    ``claims.policy_validation`` JSONB snapshot
+    policyValidation    ``expense_items.policy_validation`` JSONB, one snapshot per item
     employeeName/Grade  FK to ``employees`` + a grade snapshot on the claim
+
+**The claim's own status is derived, not decided.** Each item is judged independently and
+``ClaimService`` rolls the item statuses up into ``Claim.status`` — fraud outranks a policy hold.
+Transitions remain governed by :mod:`app.domain.claim_state_machine` and the database trigger.
 
 **Snapshot columns are intentional.** ``employee_grade`` records the value *as of submission*,
 because a later promotion must not retroactively change the policy context a historical claim was
-judged under. The employee's display name is read through the FK instead of copied, so a name
-correction propagates and PII is not duplicated.
+judged under — the policy engine reads it for the Flights, Lodging, and Client Entertainment rules.
+The employee's display name is read through the FK instead of copied, so a name correction
+propagates and PII is not duplicated.
 
 ``Claim`` carries a ``version`` column: two reviewers acting on the same claim cannot silently
 overwrite each other (the loser gets ``409 concurrent_update``).
@@ -69,13 +76,16 @@ class Claim(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base):
     __tablename__ = "claims"
     __table_args__ = (
         UniqueConstraint("claim_number", name="uq_claims_claim_number"),
-        # One claim per receipt — the database half of the "receipt already claimed" rule.
-        UniqueConstraint("receipt_id", name="uq_claims_receipt_id"),
-        CheckConstraint("amount > 0", name="ck_claims_amount_positive"),
-        CheckConstraint("amount_usd > 0", name="ck_claims_amount_usd_positive"),
         CheckConstraint("char_length(currency) = 3", name="ck_claims_currency_iso4217"),
+        # Zero, not positive: a header exists briefly before its first item is inserted.
+        CheckConstraint("total_amount >= 0", name="ck_claims_total_amount_non_negative"),
         CheckConstraint(
-            "fx_rate IS NULL OR fx_rate > 0", name="ck_claims_fx_rate_positive"
+            "total_amount_usd >= 0", name="ck_claims_total_amount_usd_non_negative"
+        ),
+        CheckConstraint("item_count >= 0", name="ck_claims_item_count_non_negative"),
+        CheckConstraint(
+            "to_date IS NULL OR from_date IS NULL OR to_date >= from_date",
+            name="ck_claims_date_range_ordered",
         ),
         # A submitted claim must know when it was submitted, and vice versa.
         CheckConstraint(
@@ -85,19 +95,18 @@ class Claim(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base):
         ),
         Index("ix_claims_employee_id_status", "employee_id", "status"),
         Index("ix_claims_status_created_at", "status", "created_at"),
-        Index("ix_claims_expense_date", "expense_date"),
-        Index("ix_claims_category", "category"),
         Index("ix_claims_assigned_reviewer_id", "assigned_reviewer_id"),
-        # Supports duplicate detection (employee + vendor + date + amount).
-        Index(
-            "ix_claims_duplicate_probe",
-            "employee_id",
-            "expense_date",
-            "amount_usd",
-        ),
     )
 
+    # Unique human-facing reference ("EXP-2026-1000"), drawn from ``claim_number_seq``. Distinct
+    # from ``title``, which is free text and may repeat across claims.
     claim_number: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    # --- report header ---
+    title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    purpose: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    from_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    to_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     # --- ownership + snapshot of the organisational context at submission time ---
     employee_id: Mapped[uuid.UUID] = mapped_column(
@@ -107,40 +116,21 @@ class Claim(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base):
     )
     employee_grade: Mapped[EmployeeGrade] = mapped_column(employee_grade_enum, nullable=False)
 
-    # --- expense facts ---
-    expense_date: Mapped[date] = mapped_column(Date, nullable=False)
-    category: Mapped[str] = mapped_column(String(64), nullable=False)
-    sub_category: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    amount: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    # --- roll-ups, maintained by the ``expense_items_recalculate_claim_totals`` trigger ---
+    # The trigger is the sole writer: it recomputes all three from ``expense_items`` on every
+    # insert, update, or delete. Never assign them in application code.
     currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="USD")
-    amount_usd: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
-    fx_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 8), nullable=True)
-
-    merchant_vendor: Mapped[str] = mapped_column(String(200), nullable=False)
-    purpose_description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
-    attendees: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    trip_log: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
-
-    has_pre_approval: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="false"
+    total_amount: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=0, server_default="0"
     )
-    pre_approval_doc_ref: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-
-    # --- receipt linkage ---
-    receipt_attached: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="false"
+    # Items may be filed in mixed currencies; only the USD roll-up is meaningfully summable, and
+    # it is what the fraud engine and duplicate probe compare against.
+    total_amount_usd: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=0, server_default="0"
     )
-    receipt_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    receipt_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("receipts.id", ondelete="SET NULL", name="fk_claims_receipt_id"),
-        nullable=True,
+    item_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
-    # Extraction snapshot as the claim was judged (a manually entered claim has no Receipt row).
-    extracted_receipt: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
-
-    # --- evaluation snapshot (the report the decision was based on) ---
-    policy_validation: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     # --- lifecycle ---
     status: Mapped[ClaimStatus] = mapped_column(
@@ -186,8 +176,13 @@ class Claim(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base):
     assigned_reviewer: Mapped[Optional["Employee"]] = relationship(  # noqa: F821
         "Employee", foreign_keys=[assigned_reviewer_id], lazy="selectin"
     )
-    receipt: Mapped[Optional["Receipt"]] = relationship(  # noqa: F821
-        "Receipt", lazy="selectin"
+    items: Mapped[List["ExpenseItem"]] = relationship(  # noqa: F821
+        "ExpenseItem",
+        back_populates="claim",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ExpenseItem.line_number",
+        lazy="selectin",
     )
 
     status_history: Mapped[List["ClaimStatusHistory"]] = relationship(
@@ -336,7 +331,7 @@ class Attachment(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             name="ck_attachments_file_size_non_negative",
         ),
         Index("ix_attachments_claim_id", "claim_id"),
-        Index("ix_attachments_receipt_id", "receipt_id"),
+        Index("ix_attachments_expense_item_id", "expense_item_id"),
     )
 
     claim_id: Mapped[uuid.UUID] = mapped_column(
@@ -344,10 +339,15 @@ class Attachment(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         ForeignKey("claims.id", ondelete="CASCADE", name="fk_attachments_claim_id"),
         nullable=False,
     )
-    # Set when the attachment is an extracted receipt document.
-    receipt_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    # Set when the document supports one specific item rather than the claim as a whole. The
+    # item's own receipt lives inline on ``expense_items``; this is for everything else.
+    expense_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("receipts.id", ondelete="SET NULL", name="fk_attachments_receipt_id"),
+        ForeignKey(
+            "expense_items.id",
+            ondelete="SET NULL",
+            name="fk_attachments_expense_item_id",
+        ),
         nullable=True,
     )
 

@@ -21,7 +21,6 @@ from app.domain.errors import (
     ImmutableEntityError,
     InvalidStateTransitionError,
     NotFoundError,
-    ReceiptAlreadyClaimedError,
     ValidationError,
 )
 
@@ -138,7 +137,6 @@ def test_formatter_serializes_exception_info():
         (ConflictError("clash"), 409),
         (InvalidStateTransitionError("Claim", "Draft", "Approved"), 409),
         (DuplicateClaimError("dupe"), 409),
-        (ReceiptAlreadyClaimedError("taken"), 409),
         (ImmutableEntityError("frozen"), 409),
         (ConcurrentUpdateError("Claim", "x"), 409),
         (ValidationError("bad"), 422),

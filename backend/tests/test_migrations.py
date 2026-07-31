@@ -31,11 +31,10 @@ EXPECTED_TABLES = {
     "claims",
     "comments",
     "employees",
+    "expense_categories",
+    "expense_items",
     "fraud_results",
     "policy_rules",
-    "receipts",
-    "receipt_fields",
-    "receipt_line_items",
     "roles",
 }
 
@@ -46,7 +45,7 @@ EXPECTED_ENUMS = {
     "attachment_kind",
     "claim_status",
     "employee_grade",
-    "extraction_status",
+    "expense_item_status",
     "fraud_risk_level",
 }
 
@@ -60,16 +59,21 @@ def test_single_migration_head():
     assert len(heads) == 1, f"expected one head, found {heads}"
 
 
-def test_revision_chain_is_linear_and_ordered():
-    """Newest-first walk of the whole chain.
+def test_revision_graph_is_complete_and_joined():
+    """Every revision, plus the shape of the one branch/merge pair in the graph.
 
-    Deliberately a hard-coded list rather than a computed one: adding a revision should require
-    updating this test, which is how a reviewer is forced to notice a new migration and confirm its
-    place in the order.
+    Deliberately hard-coded rather than computed: adding a revision should require updating this
+    test, which is how a reviewer is forced to notice a new migration and confirm its place.
+
+    The chain is not linear. ``0003_seed_reference_data`` forked into a core-domain line and an
+    AI-platform line, which ``0007_merge_heads`` rejoins — so this asserts set membership plus the
+    two edges that define the fork, rather than a single ordered walk.
     """
     script = ScriptDirectory.from_config(alembic_config())
-    revisions = list(script.walk_revisions())
-    assert [r.revision for r in revisions] == [
+    revisions = {r.revision for r in script.walk_revisions()}
+    assert revisions == {
+        "0008_multi_item_claims",
+        "0007_merge_heads",
         "0006_prompt_governance",
         "0005_duplicate_detection",
         "0004_ai_knowledge_platform",
@@ -78,7 +82,15 @@ def test_revision_chain_is_linear_and_ordered():
         "0003_seed_reference_data",
         "0002_phase1_core_domain",
         "0001_initial_receipts",
-    ]
+    }
+
+    # The fork: both 0004s descend from the same seed revision.
+    for forked in ("0004_roles_and_employee_cleanup", "0004_ai_knowledge_platform"):
+        assert script.get_revision(forked).down_revision == "0003_seed_reference_data"
+
+    # The join: the merge revision has exactly the two branch tips as parents.
+    merge = script.get_revision("0007_merge_heads")
+    assert set(merge.down_revision) == {"0005_drop_departments", "0006_prompt_governance"}
 
 
 def test_every_revision_defines_a_downgrade():
@@ -123,7 +135,11 @@ def test_guard_triggers_installed(db_engine):
                 text("SELECT tgname FROM pg_trigger WHERE NOT tgisinternal")
             )
         }
-    assert {"claims_status_transition_guard", "audit_logs_append_only"} <= triggers
+    assert {
+        "claims_status_transition_guard",
+        "audit_logs_append_only",
+        "expense_items_recalculate_claim_totals",
+    } <= triggers
 
 
 def test_claim_number_sequence_exists(db_engine):
@@ -138,27 +154,34 @@ def test_expected_indexes_on_claims(db_engine):
     assert {
         "ix_claims_employee_id_status",
         "ix_claims_status_created_at",
-        "ix_claims_expense_date",
-        "ix_claims_duplicate_probe",
+        "ix_claims_assigned_reviewer_id",
     } <= indexes
 
 
-def test_receipts_gained_employee_fk_without_losing_columns(db_engine):
-    """The additive alter must not have disturbed the pre-existing receipts columns."""
-    columns = {c["name"] for c in inspect(db_engine).get_columns("receipts")}
-    assert "employee_ref_id" in columns
-    # Columns created by 0001 must all still be present.
-    assert {
-        "id", "file_name", "content_type", "file_size_bytes", "s3_bucket", "s3_key",
-        "s3_region", "employee_id", "extraction_status", "extraction_source",
-        "raw_textract", "normalized_extraction", "vendor_name", "transaction_date",
-        "total_amount", "currency", "error_message", "created_at", "updated_at",
-    } <= columns
+def test_expected_indexes_on_expense_items(db_engine):
+    """The per-expense indexes that moved off ``claims``, plus the file-hash probe.
 
-    foreign_keys = {
-        fk["name"] for fk in inspect(db_engine).get_foreign_keys("receipts")
-    }
-    assert "fk_receipts_employee_ref_id" in foreign_keys
+    ``ix_expense_items_file_hash`` is what makes exact-duplicate receipt detection usable rather
+    than a sequential scan on every upload.
+    """
+    indexes = {index["name"] for index in inspect(db_engine).get_indexes("expense_items")}
+    assert {
+        "ix_expense_items_claim_id",
+        "ix_expense_items_status",
+        "ix_expense_items_expense_date",
+        "ix_expense_items_file_hash",
+        "ix_expense_items_duplicate_probe",
+    } <= indexes
+
+
+def test_claims_lost_the_per_expense_columns(db_engine):
+    """0008 moved every expense fact to ``expense_items``; the claim keeps only the roll-ups."""
+    columns = {c["name"] for c in inspect(db_engine).get_columns("claims")}
+    assert {"total_amount", "total_amount_usd", "item_count", "title"} <= columns
+    assert not ({
+        "amount", "amount_usd", "category", "merchant_vendor", "expense_date",
+        "receipt_id", "receipt_url", "extracted_receipt", "policy_validation",
+    } & columns)
 
 
 # --- model / migration parity ------------------------------------------------
@@ -241,6 +264,36 @@ def test_all_five_policy_categories_seeded(db_engine):
         "Lodging",
         "Client Entertainment",
     } <= categories
+
+
+def test_expense_categories_match_policy_rule_categories(db_engine):
+    """``expense_categories.name`` and ``policy_rules.category`` must not drift apart.
+
+    ``app.services.policy_engine`` dispatches on the literal category *string* an item carries, and
+    an item's category text is copied from this table. If the two vocabularies diverge, items file
+    under a name no policy rule matches and silently fall through to the generic branch.
+    """
+    with db_engine.connect() as connection:
+        seeded = {
+            row[0]
+            for row in connection.execute(
+                text("SELECT name FROM expense_categories WHERE is_active")
+            )
+        }
+        policy = {
+            row[0]
+            for row in connection.execute(
+                text("SELECT category FROM policy_rules WHERE is_active")
+            )
+        }
+    assert {
+        "Meals",
+        "Ground Transport",
+        "Flights",
+        "Lodging",
+        "Client Entertainment",
+    } <= seeded
+    assert seeded <= policy, f"categories with no policy rule: {seeded - policy}"
 
 
 def test_seed_ids_are_deterministic():
@@ -341,34 +394,24 @@ def test_full_upgrade_downgrade_upgrade_round_trip(throwaway_database):
         settings.DATABASE_URL = original
 
 
-def test_downgrade_one_step_leaves_receipts_intact(throwaway_database):
-    """Rolling back the seed and core-domain revisions must not touch T001's receipts data."""
+def test_downgrade_to_0007_restores_the_receipts_tables(throwaway_database):
+    """0008's downgrade must rebuild what it dropped.
+
+    The receipt *data* is gone for good — 0008 drops the tables outright — but the structure has to
+    come back, or the revision cannot be rolled back on a deployed database at all.
+    """
     original = settings.DATABASE_URL
     settings.DATABASE_URL = throwaway_database
     config = alembic_config()
     try:
         command.upgrade(config, "head")
+        command.downgrade(config, "0007_merge_heads")
 
         engine = create_engine(throwaway_database)
-        receipt_id = uuid.uuid4()
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "INSERT INTO receipts (id, file_name, extraction_status, employee_id) "
-                    "VALUES (:id, 'keep-me.png', 'COMPLETED', 'emp-101')"
-                ),
-                {"id": receipt_id},
-            )
-
-        command.downgrade(config, "0001_initial_receipts")
-
         with engine.connect() as connection:
-            surviving = connection.execute(
-                text("SELECT file_name FROM receipts WHERE id = :id"), {"id": receipt_id}
-            ).scalar_one()
-            columns = {c["name"] for c in inspect(connection).get_columns("receipts")}
-        assert surviving == "keep-me.png"
-        assert "employee_ref_id" not in columns  # the additive column is what was removed
+            tables = set(inspect(connection).get_table_names())
+        assert {"receipts", "receipt_fields", "receipt_line_items"} <= tables
+        assert not ({"expense_items", "expense_categories"} & tables)
         engine.dispose()
     finally:
         settings.DATABASE_URL = original
