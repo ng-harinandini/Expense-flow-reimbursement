@@ -24,6 +24,7 @@ from app.api import (
     health,
     policy_rules,
     receipts,
+    roles,
 )
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
@@ -64,6 +65,7 @@ app.include_router(health.router, prefix=settings.API_PREFIX)
 app.include_router(receipts.router, prefix=settings.API_PREFIX)
 app.include_router(auth.router, prefix=settings.API_PREFIX)
 app.include_router(admin_users.router, prefix=settings.API_PREFIX)
+app.include_router(roles.router, prefix=settings.API_PREFIX)
 app.include_router(ai_knowledge_api.router, prefix=settings.API_PREFIX)
 app.include_router(ai_search_api.router, prefix=settings.API_PREFIX)
 app.include_router(ai_duplicates_api.router, prefix=settings.API_PREFIX)

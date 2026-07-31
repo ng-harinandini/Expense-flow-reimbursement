@@ -8,6 +8,7 @@ COGNITO_TEST_PASSWORD are set in the environment (credentials are never committe
 import base64
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
@@ -16,6 +17,7 @@ from fastapi.testclient import TestClient
 import app.api.auth as auth_module
 from app.core import deps
 from app.core.config import settings
+from app.core.database import get_db
 from app.core.deps import CurrentUser
 from app.main import app
 
@@ -23,9 +25,35 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def _clear_overrides():
+def _no_db():
+    """Login touches the DB only to resolve the caller's employee row; hand it a dummy
+    session so these tests stay offline. Individual tests stub the repository itself."""
+    app.dependency_overrides[get_db] = lambda: None
     yield
     app.dependency_overrides.clear()
+
+
+def fake_employee(*, role="admin", code="emp-101", email="u@corp.com", name="Test User"):
+    return SimpleNamespace(
+        role_name=role, employee_code=code, email=email,
+        full_name=name, is_active=True,
+    )
+
+
+@pytest.fixture
+def employee(monkeypatch):
+    """Stub the employee lookup used to enrich the login response."""
+    holder = SimpleNamespace(value=fake_employee())
+
+    class _Repo:
+        def __init__(self, db):
+            pass
+
+        def get_by_cognito_sub(self, sub):
+            return holder.value
+
+    monkeypatch.setattr(auth_module, "EmployeeRepository", _Repo)
+    return holder
 
 
 def _as_admin():
@@ -93,14 +121,10 @@ def use_fake(monkeypatch):
 
 # --- POST /api/auth/login ----------------------------------------------------
 
-def test_login_success_returns_tokens_and_role(use_fake):
-    id_token = make_id_token({
-        "sub": "abc-123",
-        "email": "harini@corp.com",
-        "custom:role_id": "admin",
-        "custom:employeeId": "emp-101",
-        "cognito:groups": ["admin"],
-    })
+def test_login_success_returns_tokens_and_role(use_fake, employee):
+    """Role/email/employeeId come from the employees row, not from any token claim."""
+    employee.value = fake_employee(role="admin", code="emp-101", email="harini@corp.com")
+    id_token = make_id_token({"sub": "abc-123", "email": "ignored@corp.com"})
     use_fake(initiate={
         "AuthenticationResult": {
             "IdToken": id_token,
@@ -116,13 +140,14 @@ def test_login_success_returns_tokens_and_role(use_fake):
     assert body["idToken"] == id_token
     assert body["accessToken"] == "access-xyz"
     assert body["user"]["sub"] == "abc-123"
-    assert body["user"]["role"] == "admin"            # <- custom:role_id integrated
+    assert body["user"]["role"] == "admin"            # <- from the employee record
     assert body["user"]["employeeId"] == "emp-101"
     assert body["user"]["email"] == "harini@corp.com"
 
 
-def test_login_success_without_role_claim(use_fake):
-    """Role is None (not an error) when custom:role_id isn't set/readable yet."""
+def test_login_success_without_employee_record(use_fake, employee):
+    """Authenticated with Cognito but not provisioned yet: role is None, not an error."""
+    employee.value = None
     id_token = make_id_token({"sub": "s1", "email": "no-role@corp.com"})
     use_fake(initiate={"AuthenticationResult": {"IdToken": id_token, "AccessToken": "a"}})
     r = client.post("/api/auth/login", json={"email": "no-role@corp.com", "password": "pw"})
@@ -161,7 +186,7 @@ def test_login_no_aws_credentials_returns_502(use_fake):
     assert r.status_code == 502
 
 
-def test_login_secret_hash_added_when_client_secret_set(use_fake, monkeypatch):
+def test_login_secret_hash_added_when_client_secret_set(use_fake, employee, monkeypatch):
     fake = use_fake(initiate={"AuthenticationResult": {"IdToken": make_id_token({"sub": "s"})}})
     monkeypatch.setattr(settings, "COGNITO_APP_CLIENT_SECRET", "shhh", raising=False)
     r = client.post("/api/auth/login", json={"email": "x@corp.com", "password": "pw"})
@@ -177,21 +202,21 @@ def test_login_unconfigured_returns_503(monkeypatch):
 
 # --- POST /api/auth/respond-challenge ---------------------------------------
 
-def test_respond_challenge_success_returns_tokens(use_fake):
-    id_token = make_id_token({"sub": "s1", "email": "a@corp.com", "custom:role_id": "admin"})
+def test_respond_challenge_success_returns_tokens(use_fake, employee):
+    id_token = make_id_token({"sub": "s1", "email": "a@corp.com"})
     fake = use_fake(respond={"AuthenticationResult": {"IdToken": id_token, "AccessToken": "acc"}})
     r = client.post("/api/auth/respond-challenge",
                     json={"email": "a@corp.com", "session": "sess-1", "newPassword": "N3w!pass"})
     assert r.status_code == 200
     body = r.json()
     assert body["idToken"] == id_token
-    assert body["user"]["role"] == "admin"
+    assert body["user"]["role"] == "admin"  # from the employee record, not the token
     assert fake.last_challenge_responses["NEW_PASSWORD"] == "N3w!pass"
     assert fake.last_challenge_responses["USERNAME"] == "a@corp.com"
 
 
-def test_respond_challenge_passes_required_name(use_fake):
-    id_token = make_id_token({"sub": "s1", "email": "a@corp.com", "custom:role_id": "admin"})
+def test_respond_challenge_passes_required_name(use_fake, employee):
+    id_token = make_id_token({"sub": "s1", "email": "a@corp.com"})
     fake = use_fake(respond={"AuthenticationResult": {"IdToken": id_token, "AccessToken": "a"}})
     r = client.post("/api/auth/respond-challenge",
                     json={"email": "a@corp.com", "session": "s", "newPassword": "N3w!pass",

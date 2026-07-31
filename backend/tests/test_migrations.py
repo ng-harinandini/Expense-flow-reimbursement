@@ -30,13 +30,13 @@ EXPECTED_TABLES = {
     "claim_status_history",
     "claims",
     "comments",
-    "departments",
     "employees",
     "fraud_results",
     "policy_rules",
     "receipts",
     "receipt_fields",
     "receipt_line_items",
+    "roles",
 }
 
 EXPECTED_ENUMS = {
@@ -70,6 +70,8 @@ def test_revision_chain_is_linear_and_ordered():
     script = ScriptDirectory.from_config(alembic_config())
     revisions = list(script.walk_revisions())
     assert [r.revision for r in revisions] == [
+        "0008_drop_departments",
+        "0007_roles_and_employee_cleanup",
         "0006_prompt_governance",
         "0005_duplicate_detection",
         "0004_ai_knowledge_platform",
@@ -184,31 +186,22 @@ def test_models_match_migrations_no_pending_autogenerate(db_engine):
 # --- seed data ---------------------------------------------------------------
 
 
-def test_seeded_departments_and_employees(db_engine):
+def test_seeded_roles(db_engine):
     with db_engine.connect() as connection:
-        departments = {
-            row[0] for row in connection.execute(text("SELECT code FROM departments"))
+        roles = {
+            row[0] for row in connection.execute(text("SELECT name FROM roles"))
         }
+    assert roles == {"employee", "manager", "finance", "admin", "auditor"}
+
+
+def test_seed_employees_and_departments_are_gone_at_head(db_engine):
+    """0004/0005 remove the pre-role-system seed employees and the departments table entirely."""
+    with db_engine.connect() as connection:
         employees = {
             row[0] for row in connection.execute(text("SELECT employee_code FROM employees"))
         }
-    assert {"ENG", "PM", "CS"} <= departments
-    # The deployed Cognito users carry these codes in custom:employeeId.
-    assert {"emp-100", "emp-101", "emp-102", "emp-103", "emp-104"} <= employees
-
-
-def test_seeded_manager_chain_resolves(db_engine):
-    with db_engine.connect() as connection:
-        manager = connection.execute(
-            text(
-                """
-                SELECT m.full_name FROM employees e
-                JOIN employees m ON m.id = e.manager_id
-                WHERE e.employee_code = 'emp-101'
-                """
-            )
-        ).scalar_one()
-    assert manager == "Marcus Vance"
+    assert not ({"emp-100", "emp-101", "emp-102", "emp-103", "emp-104"} & employees)
+    assert "departments" not in set(inspect(db_engine).get_table_names())
 
 
 def test_seeded_policy_rules_carry_typed_limits_and_json(db_engine):
@@ -267,32 +260,24 @@ def test_seed_ids_are_deterministic():
 def test_seed_inserts_are_idempotent(db_engine):
     """Replaying a seed insert must be a no-op (``ON CONFLICT DO NOTHING``), not a duplicate."""
     seed_module = ScriptDirectory.from_config(alembic_config()).get_revision(
-        "0003_seed_reference_data"
+        "0007_roles_and_employee_cleanup"
     ).module
 
     with db_engine.connect() as connection:
-        before = connection.execute(text("SELECT count(*) FROM departments")).scalar_one()
+        before = connection.execute(text("SELECT count(*) FROM roles")).scalar_one()
 
-    code, name, cost_center = seed_module.DEPARTMENTS[0]
+    name, description = seed_module.ROLES[0]
     with db_engine.begin() as connection:
         connection.execute(
             text(
-                """
-                INSERT INTO departments (id, code, name, cost_center, is_active)
-                VALUES (:id, :code, :name, :cc, true)
-                ON CONFLICT (code) DO NOTHING
-                """
+                "INSERT INTO roles (name, description) VALUES (:name, :description) "
+                "ON CONFLICT (name) DO NOTHING"
             ),
-            {
-                "id": seed_module._seed_id("department", code),
-                "code": code,
-                "name": name,
-                "cc": cost_center,
-            },
+            {"name": name, "description": description},
         )
 
     with db_engine.connect() as connection:
-        after = connection.execute(text("SELECT count(*) FROM departments")).scalar_one()
+        after = connection.execute(text("SELECT count(*) FROM roles")).scalar_one()
     assert after == before
 
 

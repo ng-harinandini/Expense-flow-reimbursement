@@ -23,8 +23,9 @@ from app.models.enums import (  # noqa: F401
     FraudRiskLevel,
 )
 from app.models.fraud import FRAUD_ENGINE_VERSION, FraudResult  # noqa: F401
-from app.models.organization import Department, Employee  # noqa: F401
+from app.models.organization import Employee  # noqa: F401
 from app.models.policy import PolicyRule  # noqa: F401
+from app.models.role import Role  # noqa: F401
 from app.models.receipt import (  # noqa: F401
     ExtractionStatus,
     Receipt,
@@ -53,7 +54,6 @@ __all__ = [
     "ClaimStatus",
     "ClaimStatusHistory",
     "Comment",
-    "Department",
     "Employee",
     "EmployeeGrade",
     "ExtractionStatus",
@@ -64,5 +64,6 @@ __all__ = [
     "Receipt",
     "ReceiptField",
     "ReceiptLineItem",
+    "Role",
     "STANDARD_WORKFLOW_CODE",
 ]

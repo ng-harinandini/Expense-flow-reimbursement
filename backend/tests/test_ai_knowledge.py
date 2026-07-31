@@ -359,7 +359,7 @@ def _build_claim_service(repositories: dict, *, decision_memory=None):
     from app.services.policy_rule_service import PolicyRuleService
 
     audit = AuditService(repositories["audit"])
-    employees = EmployeeService(repositories["employees"], repositories["departments"])
+    employees = EmployeeService(repositories["employees"], repositories["roles"])
     policies = PolicyRuleService(repositories["policy_rules"], audit)
     return ClaimService(
         claim_repository=repositories["claims"],
@@ -374,7 +374,7 @@ def _build_claim_service(repositories: dict, *, decision_memory=None):
 
 
 def test_a_submitted_claim_appears_in_decision_memory_and_is_returned_by_retrieve_similar_claims(
-    db_session: Session, repositories: dict, claim_payload, employee_actor,
+    db_session: Session, repositories: dict, claim_payload, employee_actor, employee,
 ) -> None:
     stack = _Stack()
     knowledge_service = stack.service(db_session)
@@ -393,7 +393,7 @@ def test_a_submitted_claim_appears_in_decision_memory_and_is_returned_by_retriev
 
 
 def test_disabling_decision_memory_leaves_claim_submission_byte_identical(
-    db_session: Session, repositories: dict, claim_payload, employee_actor,
+    db_session: Session, repositories: dict, claim_payload, employee_actor, employee,
 ) -> None:
     """The exact scenario ``decision_memory=None`` (every existing test's ``claim_service``
     fixture) already proves implicitly — asserted explicitly here as the Done Check requires."""
@@ -430,20 +430,22 @@ def test_decision_memory_recording_does_not_prematurely_commit_the_claims_own_tr
     from app.core.database import SessionLocal
     from app.domain.actor import Actor
     from app.models.claim import Claim
-    from app.models.organization import Employee
+    from app.models.enums import EmployeeGrade
     from app.repositories.audit_repository import AuditLogRepository
     from app.repositories.claim_repository import ClaimRepository
-    from app.repositories.employee_repository import DepartmentRepository, EmployeeRepository
+    from app.repositories.employee_repository import EmployeeRepository
     from app.repositories.fraud_repository import FraudResultRepository
     from app.repositories.policy_rule_repository import PolicyRuleRepository
     from app.repositories.receipt_repository import ReceiptRepository
+    from app.repositories.role_repository import RoleRepository
     from app.repositories.workflow_repository import ApprovalWorkflowRepository
+    from tests.conftest import _make_employee
 
     session = SessionLocal()
     try:
         repositories = {
             "claims": ClaimRepository(session), "employees": EmployeeRepository(session),
-            "departments": DepartmentRepository(session),
+            "roles": RoleRepository(session),
             "policy_rules": PolicyRuleRepository(session),
             "audit": AuditLogRepository(session), "fraud": FraudResultRepository(session),
             "workflows": ApprovalWorkflowRepository(session),
@@ -453,7 +455,17 @@ def test_decision_memory_recording_does_not_prematurely_commit_the_claims_own_tr
         knowledge_service = stack.service(session)
         service = _build_claim_service(repositories, decision_memory=knowledge_service)
 
-        employee = session.query(Employee).filter_by(employee_code="emp-101").one()
+        # Created here rather than taken from the ``employee`` fixture: this test deliberately runs
+        # on its own unmanaged session (see the docstring), and the pre-role-system seed employees
+        # were removed by ``0007_roles_and_employee_cleanup``. The row is flushed, never committed,
+        # so the rollback below discards it along with the claim.
+        employee = _make_employee(
+            session,
+            code=f"emp-atomicity-{uuid.uuid4().hex[:6]}",
+            name="Atomicity Regression Employee",
+            grade=EmployeeGrade.L3,
+            role_name="employee",
+        )
         actor = Actor(
             role="employee", sub="atomicity-test-sub", employee_code=employee.employee_code,
         )

@@ -38,7 +38,8 @@ from app.domain.actor import Actor
 from app.main import app
 from app.models.claim import Claim
 from app.models.enums import ClaimStatus, EmployeeGrade
-from app.models.organization import Department, Employee
+from app.models.organization import Employee
+from app.models.role import Role
 
 # Seeded reference data from migration 0003 (deterministic across environments).
 SEED_EMPLOYEE_CODE = "emp-101"
@@ -168,24 +169,67 @@ def db_session(db_engine: Engine) -> Iterator[Session]:
         connection.close()
 
 
-# --- seeded reference data ---------------------------------------------------
+# --- reference data (roles are seeded by migration; employees are not) -------
+
+
+def _role(db_session: Session, name: str) -> Role:
+    return db_session.query(Role).filter_by(name=name).one()
+
+
+def _make_employee(
+    db_session: Session,
+    *,
+    code: str,
+    name: str,
+    grade: EmployeeGrade,
+    role_name: str,
+    manager_id: Optional[uuid.UUID] = None,
+) -> Employee:
+    employee = Employee(
+        employee_code=code,
+        full_name=name,
+        email=f"{code}@test.local",
+        grade=grade,
+        role_id=_role(db_session, role_name).id,
+        manager_id=manager_id,
+        is_active=True,
+    )
+    db_session.add(employee)
+    db_session.flush()
+    return employee
 
 
 @pytest.fixture
-def department(db_session: Session) -> Department:
-    return db_session.query(Department).filter_by(code="ENG").one()
+def role_id(db_session: Session) -> int:
+    """The seeded 'employee' role's id — roles survive the migration, unlike seed employees."""
+    return _role(db_session, "employee").id
 
 
 @pytest.fixture
-def employee(db_session: Session) -> Employee:
-    """The seeded L3 engineer used as the default claim owner."""
-    return db_session.query(Employee).filter_by(employee_code=SEED_EMPLOYEE_CODE).one()
+def manager_employee(db_session: Session) -> Employee:
+    """A manager-role employee, created fresh per test (no seed employees ship anymore)."""
+    return _make_employee(
+        db_session, code=SEED_MANAGER_CODE, name="Test Manager",
+        grade=EmployeeGrade.L5, role_name="manager",
+    )
+
+
+@pytest.fixture
+def employee(db_session: Session, manager_employee: Employee) -> Employee:
+    """The default claim owner, reporting to ``manager_employee``."""
+    return _make_employee(
+        db_session, code=SEED_EMPLOYEE_CODE, name="Test Employee",
+        grade=EmployeeGrade.L3, role_name="employee", manager_id=manager_employee.id,
+    )
 
 
 @pytest.fixture
 def other_employee(db_session: Session) -> Employee:
     """A different employee, for ownership-boundary tests."""
-    return db_session.query(Employee).filter_by(employee_code=SEED_OTHER_EMPLOYEE_CODE).one()
+    return _make_employee(
+        db_session, code=SEED_OTHER_EMPLOYEE_CODE, name="Other Employee",
+        grade=EmployeeGrade.L1, role_name="employee",
+    )
 
 
 # --- actors ------------------------------------------------------------------
@@ -232,17 +276,17 @@ def repositories(db_session: Session) -> dict:
         ApprovalWorkflowRepository,
         AuditLogRepository,
         ClaimRepository,
-        DepartmentRepository,
         EmployeeRepository,
         FraudResultRepository,
         PolicyRuleRepository,
         ReceiptRepository,
+        RoleRepository,
     )
 
     return {
         "claims": ClaimRepository(db_session),
         "employees": EmployeeRepository(db_session),
-        "departments": DepartmentRepository(db_session),
+        "roles": RoleRepository(db_session),
         "policy_rules": PolicyRuleRepository(db_session),
         "audit": AuditLogRepository(db_session),
         "fraud": FraudResultRepository(db_session),
@@ -261,7 +305,7 @@ def claim_service(repositories: dict):
     from app.services.policy_rule_service import PolicyRuleService
 
     audit = AuditService(repositories["audit"])
-    employees = EmployeeService(repositories["employees"], repositories["departments"])
+    employees = EmployeeService(repositories["employees"], repositories["roles"])
     policies = PolicyRuleService(repositories["policy_rules"], audit)
 
     return ClaimService(
@@ -392,7 +436,6 @@ def make_claim(db_session: Session, employee: Employee):
             claim_number=repository.next_claim_number(),
             employee_id=subject.id,
             employee_grade=subject.grade or EmployeeGrade.L3,
-            department_id=subject.department_id,
             expense_date=expense_date or (date.today() - timedelta(days=2)),
             category=category,
             sub_category="Test",
@@ -428,11 +471,16 @@ def as_role(role: str, *, employee_id: Optional[str] = None, email: Optional[str
 
 
 @pytest.fixture
-def client(db_session: Session) -> Iterator[TestClient]:
+def client(
+    db_session: Session, employee: Employee, other_employee: Employee
+) -> Iterator[TestClient]:
     """``TestClient`` whose requests share the test transaction.
 
     ``get_db`` is overridden with the rolled-back session, so API tests exercise the real
-    repository/service graph and commit paths without persisting anything.
+    repository/service graph and commit paths without persisting anything. Depends on ``employee``/
+    ``other_employee`` (and transitively ``manager_employee``) so ``SEED_EMPLOYEE_CODE`` /
+    ``SEED_MANAGER_CODE`` / ``SEED_OTHER_EMPLOYEE_CODE`` always resolve to a real row for every API
+    test, the same guarantee migration-seeded employees used to provide unconditionally.
     """
     app.dependency_overrides[get_db] = lambda: db_session
     test_client = TestClient(app)

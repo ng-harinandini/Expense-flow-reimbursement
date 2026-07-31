@@ -1,9 +1,13 @@
-import type { Metadata } from 'next';
-import './globals.css';
+import type { Metadata } from "next";
+import "./globals.css";
+import { QueryProvider } from "../providers/QueryProvider";
+import { ToastProvider } from "@/components/ui/toast";
+import { UserProvider } from "@/context/UserContext";
 
 export const metadata: Metadata = {
-  title: 'ExpenseFlow AI - Next.js Enterprise Expense Platform',
-  description: 'Enterprise expense reimbursement platform built with Next.js App Router, Gemini AI OCR, multi-tier policy engine, fraud screening, and AWS serverless architecture.',
+  title: "ExpenseFlow AI - Next.js Enterprise Expense Platform",
+  description:
+    "Enterprise expense reimbursement platform built with Next.js App Router, Gemini AI OCR, multi-tier policy engine, fraud screening, and AWS serverless architecture.",
 };
 
 export default function RootLayout({
@@ -12,9 +16,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <body className="bg-[#020617] text-slate-100 antialiased selection:bg-orange-500/30 selection:text-orange-200">
-        {children}
+    <html lang="en">
+      <body className="bg-background text-foreground antialiased">
+        <QueryProvider>
+          <ToastProvider>
+            <UserProvider>{children}</UserProvider>
+          </ToastProvider>
+        </QueryProvider>
       </body>
     </html>
   );

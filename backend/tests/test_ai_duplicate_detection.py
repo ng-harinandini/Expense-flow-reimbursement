@@ -790,7 +790,7 @@ def _build_claim_service(repositories: dict, *, duplicate_detection=None):
     from app.services.policy_rule_service import PolicyRuleService
 
     audit = AuditService(repositories["audit"])
-    employees = EmployeeService(repositories["employees"], repositories["departments"])
+    employees = EmployeeService(repositories["employees"], repositories["roles"])
     policies = PolicyRuleService(repositories["policy_rules"], audit)
     return ClaimService(
         claim_repository=repositories["claims"],
@@ -805,7 +805,7 @@ def _build_claim_service(repositories: dict, *, duplicate_detection=None):
 
 
 def test_submitting_a_claim_records_its_fingerprint(
-    db_session: Session, repositories: dict, claim_payload, employee_actor,
+    db_session: Session, repositories: dict, claim_payload, employee_actor, employee,
 ) -> None:
     duplicate_detection = DuplicateDetectionService(session=db_session, tenant_id=TENANT_ID)
     service = _build_claim_service(repositories, duplicate_detection=duplicate_detection)
@@ -821,7 +821,7 @@ def test_submitting_a_claim_records_its_fingerprint(
 
 
 def test_disabling_duplicate_detection_leaves_claim_submission_byte_identical(
-    db_session: Session, repositories: dict, claim_payload, employee_actor,
+    db_session: Session, repositories: dict, claim_payload, employee_actor, employee,
 ) -> None:
     with_scan = _build_claim_service(
         repositories,
@@ -841,7 +841,7 @@ def test_disabling_duplicate_detection_leaves_claim_submission_byte_identical(
 
 
 def test_duplicate_scan_never_blocks_claim_submission_even_on_a_confirmed_verdict(
-    db_session: Session, repositories: dict, claim_payload, employee_actor,
+    db_session: Session, repositories: dict, claim_payload, employee_actor, employee,
 ) -> None:
     """The engine is advisory only: even a CONFIRMED verdict must not prevent the second claim
     from being created (the existing deterministic block, not this engine, owns rejection — and it
@@ -881,7 +881,7 @@ def test_duplicate_scan_never_blocks_claim_submission_even_on_a_confirmed_verdic
 
 
 def test_duplicate_scan_failure_does_not_fail_claim_submission(
-    db_session: Session, repositories: dict, claim_payload, employee_actor,
+    db_session: Session, repositories: dict, claim_payload, employee_actor, employee,
 ) -> None:
     class _BrokenRecorder:
         def scan_claim(self, *args, **kwargs):

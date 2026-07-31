@@ -9,12 +9,12 @@ either a typed column, a foreign key, or a child row:
     comments            ``comments`` rows
     fraudScreening      ``fraud_results`` rows (latest wins)
     policyValidation    ``claims.policy_validation`` JSONB snapshot
-    employeeName/Grade  FK to ``employees`` + a grade/department snapshot on the claim
+    employeeName/Grade  FK to ``employees`` + a grade snapshot on the claim
 
-**Snapshot columns are intentional.** ``employee_grade`` and ``department_id`` record the values
-*as of submission*, because a later promotion or transfer must not retroactively change the policy
-context a historical claim was judged under. The employee's display name is read through the FK
-instead of copied, so a name correction propagates and PII is not duplicated.
+**Snapshot columns are intentional.** ``employee_grade`` records the value *as of submission*,
+because a later promotion must not retroactively change the policy context a historical claim was
+judged under. The employee's display name is read through the FK instead of copied, so a name
+correction propagates and PII is not duplicated.
 
 ``Claim`` carries a ``version`` column: two reviewers acting on the same claim cannot silently
 overwrite each other (the loser gets ``409 concurrent_update``).
@@ -88,7 +88,6 @@ class Claim(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base):
         Index("ix_claims_expense_date", "expense_date"),
         Index("ix_claims_category", "category"),
         Index("ix_claims_assigned_reviewer_id", "assigned_reviewer_id"),
-        Index("ix_claims_department_id", "department_id"),
         # Supports duplicate detection (employee + vendor + date + amount).
         Index(
             "ix_claims_duplicate_probe",
@@ -107,11 +106,6 @@ class Claim(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base):
         nullable=False,
     )
     employee_grade: Mapped[EmployeeGrade] = mapped_column(employee_grade_enum, nullable=False)
-    department_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("departments.id", ondelete="RESTRICT", name="fk_claims_department_id"),
-        nullable=False,
-    )
 
     # --- expense facts ---
     expense_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -189,7 +183,6 @@ class Claim(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base):
     employee: Mapped["Employee"] = relationship(  # noqa: F821
         "Employee", foreign_keys=[employee_id], lazy="joined"
     )
-    department: Mapped["Department"] = relationship("Department", lazy="joined")  # noqa: F821
     assigned_reviewer: Mapped[Optional["Employee"]] = relationship(  # noqa: F821
         "Employee", foreign_keys=[assigned_reviewer_id], lazy="selectin"
     )

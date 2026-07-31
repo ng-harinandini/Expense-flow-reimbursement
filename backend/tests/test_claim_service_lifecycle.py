@@ -65,13 +65,12 @@ def test_submission_history_records_every_step_in_order(claim_service, claim_pay
     assert steps[-1][2] is ClaimStatus.AUTO_APPROVED
 
 
-def test_submission_snapshots_the_employees_grade_and_department(
+def test_submission_snapshots_the_employees_grade(
     claim_service, claim_payload, employee_actor, employee
 ):
     """A later promotion must not retroactively change how a claim was judged."""
     claim = claim_service.submit_claim(claim_payload(), actor=employee_actor)
     assert claim.employee_grade is employee.grade
-    assert claim.department_id == employee.department_id
 
 
 def test_submission_writes_audit_records(
