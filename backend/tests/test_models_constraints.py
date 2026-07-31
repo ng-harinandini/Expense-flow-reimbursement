@@ -19,7 +19,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from app.models.claim import Claim, Comment
 from app.models.enums import ClaimStatus, EmployeeGrade, FraudRiskLevel
 from app.models.fraud import FraudResult
-from app.models.organization import Department, Employee
+from app.models.organization import Employee
 from app.models.policy import PolicyRule
 
 
@@ -28,7 +28,6 @@ def _claim_kwargs(employee: Employee, **overrides) -> dict:
         claim_number=f"EXP-TEST-{uuid.uuid4().hex[:10]}",
         employee_id=employee.id,
         employee_grade=employee.grade,
-        department_id=employee.department_id,
         expense_date=date.today() - timedelta(days=1),
         category="Meals",
         amount=Decimal("10.00"),
@@ -315,37 +314,41 @@ def test_history_sequence_unique_per_claim(db_session, make_claim):
 # --- reference data -----------------------------------------------------------
 
 
-def test_department_code_unique(db_session):
-    db_session.add(Department(code="ENG", name="Duplicate Engineering"))
+def test_role_name_unique(db_session):
+    from app.models.role import Role
+
+    db_session.add(Role(name="employee", description="Duplicate"))
     with pytest.raises(IntegrityError) as raised:
         db_session.flush()
-    assert "uq_departments_code" in str(raised.value.orig)
+    assert "uq_roles_name" in str(raised.value.orig)
     db_session.rollback()
 
 
-def test_employee_code_and_email_unique(db_session, department):
-    db_session.add(
-        Employee(
-            employee_code="emp-101", full_name="Impostor", email="new@enterprise.com",
-            grade=EmployeeGrade.L1, department_id=department.id,
-        )
-    )
+def test_employee_code_and_email_unique(db_session, employee, role_id):
+    # Nested savepoints: the fixture-created ``employee`` was only flushed (not committed), so a
+    # plain ``rollback()`` here would discard it too — scope each failed insert to its own
+    # savepoint instead, matching ``employee``'s lifetime to the outer transaction.
     with pytest.raises(IntegrityError) as raised:
-        db_session.flush()
+        with db_session.begin_nested():
+            db_session.add(
+                Employee(
+                    employee_code=employee.employee_code, full_name="Impostor",
+                    email="new@enterprise.com", grade=EmployeeGrade.L1, role_id=role_id,
+                )
+            )
+            db_session.flush()
     assert "uq_employees_employee_code" in str(raised.value.orig)
-    db_session.rollback()
 
-    db_session.add(
-        Employee(
-            employee_code="emp-999", full_name="Impostor",
-            email="sarah.j@enterprise.com", grade=EmployeeGrade.L1,
-            department_id=department.id,
-        )
-    )
     with pytest.raises(IntegrityError) as raised:
-        db_session.flush()
+        with db_session.begin_nested():
+            db_session.add(
+                Employee(
+                    employee_code="emp-999", full_name="Impostor",
+                    email=employee.email, grade=EmployeeGrade.L1, role_id=role_id,
+                )
+            )
+            db_session.flush()
     assert "uq_employees_email" in str(raised.value.orig)
-    db_session.rollback()
 
 
 def test_policy_rule_expiry_cannot_precede_effective_date(db_session):

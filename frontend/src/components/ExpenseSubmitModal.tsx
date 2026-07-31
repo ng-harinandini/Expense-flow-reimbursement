@@ -146,7 +146,6 @@ export const ExpenseSubmitModal: React.FC<ExpenseSubmitModalProps> = ({
       employeeId: currentEmployee.id,
       employeeName: currentEmployee.name,
       employeeGrade: currentEmployee.grade,
-      department: currentEmployee.department,
       category,
       merchantVendor: vendor,
       amount: parsedAmount,

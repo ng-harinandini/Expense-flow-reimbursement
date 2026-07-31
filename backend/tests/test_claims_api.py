@@ -22,7 +22,7 @@ from tests.conftest import (
 
 # The exact keys the frontend's ExpenseClaim interface reads.
 REQUIRED_CLAIM_KEYS = {
-    "id", "claimNumber", "employeeId", "employeeName", "employeeGrade", "department",
+    "id", "claimNumber", "employeeId", "employeeName", "employeeGrade",
     "expenseDate", "submissionDate", "category", "subCategory", "amount", "currency",
     "amountUSD", "merchantVendor", "purposeDescription", "receiptAttached",
     "policyValidation", "fraudScreening", "status", "workflowHistory", "comments",
@@ -54,8 +54,7 @@ def test_create_claim_returns_the_legacy_shape(client):
     claim = _submit(client)
     assert REQUIRED_CLAIM_KEYS <= set(claim)
     assert claim["employeeId"] == SEED_EMPLOYEE_CODE
-    assert claim["employeeName"] == "Sarah Jenkins"
-    assert claim["department"] == "Engineering"
+    assert claim["employeeName"] == "Test Employee"
     assert claim["employeeGrade"] == "L3"
     assert claim["status"] == "Auto_Approved"
     assert claim["amountUSD"] == 22.50

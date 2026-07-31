@@ -20,13 +20,11 @@ from app.repositories.ai_inference_repository import AIInferenceRepository  # no
 from app.repositories.audit_repository import AuditLogRepository  # noqa: F401
 from app.repositories.base import BaseRepository  # noqa: F401
 from app.repositories.claim_repository import ClaimQuery, ClaimRepository  # noqa: F401
-from app.repositories.employee_repository import (  # noqa: F401
-    DepartmentRepository,
-    EmployeeRepository,
-)
+from app.repositories.employee_repository import EmployeeRepository  # noqa: F401
 from app.repositories.fraud_repository import FraudResultRepository  # noqa: F401
 from app.repositories.policy_rule_repository import PolicyRuleRepository  # noqa: F401
 from app.repositories.receipt_repository import ReceiptRepository  # noqa: F401
+from app.repositories.role_repository import RoleRepository  # noqa: F401
 from app.repositories.workflow_repository import ApprovalWorkflowRepository  # noqa: F401
 
 __all__ = [
@@ -36,9 +34,9 @@ __all__ = [
     "BaseRepository",
     "ClaimQuery",
     "ClaimRepository",
-    "DepartmentRepository",
     "EmployeeRepository",
     "FraudResultRepository",
     "PolicyRuleRepository",
     "ReceiptRepository",
+    "RoleRepository",
 ]

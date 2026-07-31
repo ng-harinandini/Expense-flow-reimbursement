@@ -244,6 +244,43 @@
   );
 }
 
+@keyframes scan-sweep {
+  0% {
+    top: -10%;
+  }
+  100% {
+    top: 110%;
+  }
+}
+
+.scan-sweep-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0.5rem;
+  margin-top: -0.25rem;
+  animation: scan-sweep 1.8s linear infinite;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in oklab, var(--primary) 85%, transparent),
+    transparent
+  );
+  z-index: 10;
+}
+
+/* Hide the native date-picker indicator; a custom icon is rendered instead */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
 /* Progress bar animations */
 @keyframes progress-shine {
   0% {

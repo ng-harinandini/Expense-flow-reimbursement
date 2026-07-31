@@ -36,11 +36,24 @@ def test_base_exists_and_count(repositories, employee):
     employees = repositories["employees"]
     assert employees.exists(employee.id) is True
     assert employees.exists(uuid.uuid4()) is False
-    assert employees.count() >= 5
+    assert employees.count() >= 1
 
 
-def test_base_list_paginates(repositories):
+def test_base_list_paginates(repositories, role_id):
+    from app.models.enums import EmployeeGrade
+    from app.models.organization import Employee
+
     employees = repositories["employees"]
+    employees.add_all(
+        [
+            Employee(
+                employee_code=f"emp-page-{index}", full_name=f"Page {index}",
+                email=f"page{index}@enterprise.com", grade=EmployeeGrade.L1,
+                role_id=role_id,
+            )
+            for index in range(4)
+        ]
+    )
     first = employees.list(limit=2)
     second = employees.list(limit=2, offset=2)
     assert len(first) == 2
@@ -53,7 +66,7 @@ def test_base_get_or_raise_message_names_the_entity(repositories):
     assert raised.value.entity == "Employee"
 
 
-def test_base_add_all_flushes_every_row(repositories, department):
+def test_base_add_all_flushes_every_row(repositories, role_id):
     from app.models.enums import EmployeeGrade
     from app.models.organization import Employee
 
@@ -62,7 +75,7 @@ def test_base_add_all_flushes_every_row(repositories, department):
             Employee(
                 employee_code=f"emp-bulk-{index}", full_name=f"Bulk {index}",
                 email=f"bulk{index}@enterprise.com", grade=EmployeeGrade.L1,
-                department_id=department.id,
+                role_id=role_id,
             )
             for index in range(2)
         ]
@@ -70,7 +83,7 @@ def test_base_add_all_flushes_every_row(repositories, department):
     assert all(row.id is not None for row in created)
 
 
-def test_base_delete_removes_the_row(repositories, department):
+def test_base_delete_removes_the_row(repositories, role_id):
     from app.models.enums import EmployeeGrade
     from app.models.organization import Employee
 
@@ -78,7 +91,7 @@ def test_base_delete_removes_the_row(repositories, department):
     row = employees.add(
         Employee(
             employee_code="emp-temp", full_name="Temp", email="temp@enterprise.com",
-            grade=EmployeeGrade.L1, department_id=department.id,
+            grade=EmployeeGrade.L1, role_id=role_id,
         )
     )
     row_id = row.id
@@ -86,7 +99,7 @@ def test_base_delete_removes_the_row(repositories, department):
     assert employees.get(row_id) is None
 
 
-# --- employee / department directory ------------------------------------------
+# --- employee directory --------------------------------------------------------
 
 
 def test_employee_lookup_by_code_email_and_sub(repositories, employee):
@@ -131,17 +144,40 @@ def test_list_active_and_direct_reports(repositories, employee):
     assert employee.id in {e.id for e in reports}
 
 
-def test_department_lookups(repositories, department):
-    departments = repositories["departments"]
-    assert departments.get_by_code("ENG").id == department.id
-    assert departments.get_by_name("Engineering").id == department.id
-    assert departments.get_by_code("NOPE") is None
-    assert "Engineering" in {d.name for d in departments.list_active()}
+def test_role_lookups(repositories):
+    roles = repositories["roles"]
+    employee_role = roles.get_by_name("employee")
+    assert employee_role is not None
+    assert roles.get_by_name("nope") is None
+    assert "employee" in {r.name for r in roles.list_all()}
 
 
 def test_employee_derived_properties(employee):
-    assert employee.department_name == "Engineering"
-    assert employee.manager_name == "Marcus Vance"
+    assert employee.role_name == "employee"
+    assert employee.manager_name == "Test Manager"
+
+
+def test_next_employee_code_increments_and_defaults_to_emp_000(repositories, role_id):
+    from app.models.enums import EmployeeGrade
+    from app.models.organization import Employee
+
+    employees = repositories["employees"]
+    assert employees.next_employee_code() == "emp-000"
+
+    employees.add(
+        Employee(
+            employee_code="emp-007", full_name="Seven", email="seven@enterprise.com",
+            grade=EmployeeGrade.L1, role_id=role_id,
+        )
+    )
+    assert employees.next_employee_code() == "emp-008"
+
+
+def test_get_by_codes_batches_lookup(repositories, employee, other_employee):
+    employees = repositories["employees"]
+    found = employees.get_by_codes([employee.employee_code, other_employee.employee_code, "nope"])
+    assert set(found) == {employee.employee_code, other_employee.employee_code}
+    assert employees.get_by_codes([]) == {}
 
 
 # --- receipts ----------------------------------------------------------------

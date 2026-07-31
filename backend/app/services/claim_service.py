@@ -352,9 +352,8 @@ class ClaimService:
         claim = Claim(
             claim_number=self._claims.next_claim_number(),
             employee_id=employee.id,
-            # Snapshot: a later promotion or transfer must not re-judge a historical claim.
+            # Snapshot: a later promotion must not re-judge a historical claim.
             employee_grade=employee.grade,
-            department_id=employee.department_id,
             expense_date=expense_date,
             category=category,
             sub_category=(payload.get("subCategory") or "General Expense").strip(),

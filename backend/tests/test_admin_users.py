@@ -79,7 +79,8 @@ def called(fake, name):
 def test_non_admin_forbidden_on_every_route(fake, client):
     as_role("finance")  # not admin
     assert client.get("/api/admin/users").status_code == 403
-    assert client.post("/api/admin/users", json={"email": "a@b.com", "role": "employee"}).status_code == 403
+    payload = {"email": "a@b.com", "role": "employee", "name": "A B", "grade": "L1"}
+    assert client.post("/api/admin/users", json=payload).status_code == 403
     assert client.get("/api/admin/users/a@b.com").status_code == 403
     assert client.post("/api/admin/users/a@b.com/role", json={"role": "manager"}).status_code == 403
     assert client.post("/api/admin/users/a@b.com/disable").status_code == 403
@@ -94,19 +95,66 @@ def test_unauthenticated_is_401(fake, client):
 
 def test_create_user_sets_role_id(fake, client):
     as_role("admin")
-    r = client.post("/api/admin/users", json={"email": "New@Corp.com", "role": "manager", "employeeId": "emp-9"})
-    assert r.status_code == 201
+    payload = {"email": "New@Corp.com", "role": "manager", "name": "New Corp", "grade": "L3"}
+    r = client.post("/api/admin/users", json=payload)
+    assert r.status_code == 201, r.text
+    body = r.json()
     (_, kw), = called(fake, "admin_create_user")
     assert kw["Username"] == "new@corp.com"  # normalized
     attrs = {a["Name"]: a["Value"] for a in kw["UserAttributes"]}
     assert attrs["custom:role_id"] == "manager"
-    assert attrs["custom:employeeId"] == "emp-9"
+    # employeeId is server-generated (client-supplied values are ignored) — cross-check with the
+    # employees row it just created rather than hardcoding the code.
+    assert attrs["custom:employeeId"] == body["employeeId"]
+    assert body["grade"] == "L3"
+    assert body["fullName"] == "New Corp"
+    assert body["isActive"] is True
 
 
 def test_create_user_invalid_role_400(fake, client):
     as_role("admin")
-    r = client.post("/api/admin/users", json={"email": "a@b.com", "role": "superuser"})
+    payload = {"email": "a@b.com", "role": "superuser", "name": "A B", "grade": "L1"}
+    r = client.post("/api/admin/users", json=payload)
     assert r.status_code == 400
+    assert called(fake, "admin_create_user") == []  # rejected before touching Cognito
+
+
+def test_create_user_provisions_a_postgres_employee_row(fake, client, db_session):
+    """The point of this change: creating a user must not be Cognito-only."""
+    from app.models.organization import Employee
+
+    as_role("admin")
+    payload = {"email": "provisioned@corp.com", "role": "employee", "name": "Provisioned Person",
+               "grade": "L2"}
+    r = client.post("/api/admin/users", json=payload)
+    assert r.status_code == 201, r.text
+    body = r.json()
+
+    row = db_session.query(Employee).filter_by(employee_code=body["employeeId"]).one()
+    assert row.full_name == "Provisioned Person"
+    assert row.email == "provisioned@corp.com"
+    assert row.role.name == "employee"
+    assert row.cognito_sub == "sub-1"  # linked from the (fake) Cognito response
+    assert row.is_active is True
+
+
+def test_create_user_with_manager_links_manager_id(fake, client, employee):
+    as_role("admin")
+    payload = {"email": "reports-to@corp.com", "role": "employee", "name": "Reports To",
+               "grade": "L1", "managerId": str(employee.id)}
+    r = client.post("/api/admin/users", json=payload)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["managerId"] == str(employee.id)
+    assert body["managerName"] == employee.full_name
+
+
+def test_create_user_unknown_manager_404(fake, client):
+    as_role("admin")
+    payload = {"email": "orphan@corp.com", "role": "employee", "name": "Orphan", "grade": "L1",
+               "managerId": "00000000-0000-0000-0000-000000000000"}
+    r = client.post("/api/admin/users", json=payload)
+    assert r.status_code == 404
     assert called(fake, "admin_create_user") == []  # rejected before touching Cognito
 
 
