@@ -24,7 +24,7 @@ export const WorkflowVisualizer: React.FC = () => {
       { id: 'policy', name: 'Policy Validation Engine', log: '[00:00.10] Lambda Policy: Verified within $25 auto-approve limit. Zero policy violations.' },
       { id: 'fraud', name: 'Anomaly Screening', log: '[00:00.15] Lambda Fraud: Risk score 5/100. No split transactions or duplicates found.' },
       { id: 'route', name: 'Choice Decision State', log: '[00:00.20] Choice State: Evaluated autoApproved == true -> Route to AutoApproveDisburse' },
-      { id: 'disburse', name: 'Disbursement & Audit Log', log: '[00:00.25] Task Disburse: Claim status updated to Auto_Approved. SQS message sent.' }
+      { id: 'disburse', name: 'Disbursement & Audit Log', log: '[00:00.25] Task Disburse: Claim status updated to auto_approved. SQS message sent.' }
     ];
 
     steps.forEach((s, idx) => {

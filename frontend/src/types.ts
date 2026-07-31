@@ -44,17 +44,32 @@ export type ExpenseCategory =
   | 'Health & Wellness'
   | 'Misc / Other';
 
+/**
+ * Claim-level status. Mirrors the `check (status in (...))` constraint on the
+ * claims table — these are the only values the backend will accept or return.
+ * Labels and badge styles live in `@/lib/claimStatus`.
+ */
 export type ClaimStatus =
-  | 'Draft'
-  | 'Submitted'
-  | 'Processing_AI'
-  | 'Auto_Approved'
-  | 'Manager_Review'
-  | 'Finance_Review'
-  | 'Approved'
-  | 'Rejected'
-  | 'Disbursed'
-  | 'Flagged_Fraud';
+  | 'submitted'        // raised, nothing needs review yet
+  | 'auto_approved'    // every item cleared automatically
+  | 'manager_review'   // at least one item is policy_hold, none are fraud
+  | 'fraud_review'     // at least one item is fraud_flag (highest priority)
+  | 'finance_review'   // manager cleared it; finance verifies before payout
+  | 'approved'         // fully resolved, approved
+  | 'rejected'         // fully resolved, rejected
+  | 'disbursed';       // paid out
+
+/**
+ * Per-expense-item status. Mirrors the `check (status in (...))` constraint on
+ * the expense_items table. Item statuses roll up into the claim status above.
+ */
+export type ExpenseItemStatus =
+  | 'submitted'         // awaiting automated checks
+  | 'auto_approved'
+  | 'policy_hold'
+  | 'fraud_flag'
+  | 'manager_approved'  // human overrode/cleared a hold or flag
+  | 'rejected';
 
 export interface ReceiptData {
   fileName?: string;
@@ -188,6 +203,9 @@ export interface ClaimExpenseItem {
   amount: number;
   currency: string;
   receiptUrl: string;
+  status: ExpenseItemStatus;
+  /** Why this item is on hold or flagged, shown beside the item on the claims list. */
+  statusReason?: string;
 }
 
 /** A claim raised for a trip/purchase, grouping one or more expense items. */

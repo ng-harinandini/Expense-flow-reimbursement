@@ -54,18 +54,16 @@ const STEPS: StepDefinition[] = [
 ];
 
 const TERMINAL_STEP_INDEX_BY_STATUS: Record<ClaimStatus, number> = {
-  Draft: -1,
-  Submitted: 0,
-  // AI scanning is invisible in the stepper now — the claim just stays on
-  // "Submitted" until manager review actually begins.
-  Processing_AI: 0,
-  Auto_Approved: 2,
-  Manager_Review: 1,
-  Finance_Review: 2,
-  Approved: 2,
-  Rejected: 2,
-  Disbursed: 3,
-  Flagged_Fraud: 1,
+  draft: -1,
+  submitted: 0,
+  manager_review: 1,
+  fraud_review: 1,
+  finance_review: 2,
+  // Auto-approved claims skip both review steps; approved means finance is done.
+  auto_approved: 2,
+  approved: 2,
+  rejected: 2,
+  disbursed: 3,
 };
 
 export function getCurrentStepIndex(status: ClaimStatus): number {
@@ -73,10 +71,10 @@ export function getCurrentStepIndex(status: ClaimStatus): number {
 }
 
 const STEP_STATUS_LABEL_OVERRIDE: Partial<Record<ClaimStatus, string>> = {
-  Approved: "Approved",
-  Auto_Approved: "Approved",
-  Rejected: "Rejected",
-  Flagged_Fraud: "Flagged for review",
+  approved: "Approved",
+  auto_approved: "Auto approved",
+  rejected: "Rejected",
+  fraud_review: "Flagged for review",
 };
 
 interface StepVisualOverride {
@@ -90,12 +88,12 @@ interface StepVisualOverride {
 // reflect the actual outcome instead of the generic pipeline stage icon.
 function getCurrentStepOverride(status: ClaimStatus): StepVisualOverride | null {
   switch (status) {
-    case "Approved":
-    case "Auto_Approved":
+    case "approved":
+    case "auto_approved":
       return { icon: Check, circleClass: "bg-emerald-600 text-white", textClass: "text-emerald-600" };
-    case "Rejected":
+    case "rejected":
       return { icon: X, circleClass: "bg-destructive text-white", textClass: "text-destructive" };
-    case "Flagged_Fraud":
+    case "fraud_review":
       return { icon: AlertTriangle, circleClass: "bg-destructive text-white", textClass: "text-destructive" };
     default:
       return null;

@@ -8,7 +8,7 @@ export const INITIAL_AUDIT_TRAIL: AuditTrailClaim[] = [
   {
     id: 'audit-0841',
     claimRef: 'EXP-2026-0841',
-    status: 'Submitted',
+    status: 'submitted',
     events: [
       {
         id: 'audit-0841-1',
@@ -39,7 +39,7 @@ export const INITIAL_AUDIT_TRAIL: AuditTrailClaim[] = [
   {
     id: 'audit-0843',
     claimRef: 'EXP-2026-0843',
-    status: 'Flagged_Fraud',
+    status: 'fraud_review',
     riskScore: 82,
     events: [
       {
@@ -63,7 +63,7 @@ export const INITIAL_AUDIT_TRAIL: AuditTrailClaim[] = [
   {
     id: 'audit-0842',
     claimRef: 'EXP-2026-0842',
-    status: 'Approved',
+    status: 'approved',
     events: [
       {
         id: 'audit-0842-1',
@@ -86,7 +86,7 @@ export const INITIAL_AUDIT_TRAIL: AuditTrailClaim[] = [
   {
     id: 'audit-0845',
     claimRef: 'EXP-2026-0845',
-    status: 'Submitted',
+    status: 'submitted',
     events: [
       {
         id: 'audit-0845-1',
@@ -101,7 +101,7 @@ export const INITIAL_AUDIT_TRAIL: AuditTrailClaim[] = [
   {
     id: 'audit-0710',
     claimRef: 'EXP-2026-0710',
-    status: 'Submitted',
+    status: 'submitted',
     events: [
       {
         id: 'audit-0710-1',

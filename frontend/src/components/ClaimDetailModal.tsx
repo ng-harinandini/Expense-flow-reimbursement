@@ -32,9 +32,9 @@ export const ClaimDetailModal: React.FC<ClaimDetailModalProps> = ({
               </span>
               <h2 className="text-xl font-bold text-white">${claim.amountUSD.toFixed(2)} USD</h2>
               <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-                claim.status === 'Auto_Approved' || claim.status === 'Approved' || claim.status === 'Disbursed'
+                claim.status === 'auto_approved' || claim.status === 'approved' || claim.status === 'disbursed'
                   ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                  : claim.status === 'Flagged_Fraud'
+                  : claim.status === 'fraud_review'
                   ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold animate-pulse'
                   : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
               }`}>

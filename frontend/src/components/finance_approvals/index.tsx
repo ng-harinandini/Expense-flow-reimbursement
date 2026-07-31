@@ -20,7 +20,7 @@ import { FinanceReviewDialog } from "./FinanceReviewDialog";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
-const PENDING_STATUS: ClaimStatus = "Finance_Review";
+const PENDING_STATUS: ClaimStatus = "finance_review";
 
 function FinanceApprovals() {
   const [claims, setClaims] = React.useState<Claim[]>(INITIAL_MULTI_ITEM_CLAIMS);
@@ -43,7 +43,7 @@ function FinanceApprovals() {
         actorRole: "finance",
         stepName: "Finance Review",
         action,
-        status: nextStatus === "Rejected" ? "FAILED" : "SUCCESS",
+        status: nextStatus === "rejected" ? "FAILED" : "SUCCESS",
         notes,
       };
 
@@ -59,12 +59,12 @@ function FinanceApprovals() {
   );
 
   const handleApprove = React.useCallback(
-    (claim: Claim) => applyDecision(claim, "Approved", "Approved claim for disbursement"),
+    (claim: Claim) => applyDecision(claim, "approved", "Approved claim for disbursement"),
     [applyDecision]
   );
 
   const handleReject = React.useCallback(
-    (claim: Claim, reason: string) => applyDecision(claim, "Rejected", "Rejected claim", reason),
+    (claim: Claim, reason: string) => applyDecision(claim, "rejected", "Rejected claim", reason),
     [applyDecision]
   );
 

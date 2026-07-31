@@ -91,9 +91,10 @@ export function Sidebar({
 }) {
   const pathname = usePathname();
   const asideRef = React.useRef<HTMLElement>(null);
-  const visibleNavItems = role
-    ? NAV_ITEMS.filter((item) => item.roles.includes(role))
-    : [];
+  const visibleNavItems = NAV_ITEMS;
+  // const visibleNavItems = role
+  //   ? NAV_ITEMS.filter((item) => item.roles.includes(role))
+  //   : [];
 
   // Clicking (or Enter-ing) a nav link leaves it focused even though this is
   // a client-side route change, not a real page load. Since the sidebar's

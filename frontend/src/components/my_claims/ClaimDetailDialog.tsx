@@ -25,50 +25,49 @@ import { ClaimStatusStepper, getCurrentStepIndex } from "./ClaimStatusStepper";
 
 function getCurrentStepCopy(status: Claim["status"], manager?: string): { title: string; body: string } {
   switch (status) {
-    case "Submitted":
+    case "submitted":
       return {
         title: "Currently: Submitted",
-        body: "Your claim has been received and is queued for AI scanning.",
+        body: "Your claim has been received and is queued for automated checks.",
       };
-    case "Processing_AI":
-      return {
-        title: "Currently: AI scanning",
-        body: "Our system is extracting receipt data and validating policy compliance.",
-      };
-    case "Manager_Review":
+    case "manager_review":
       return {
         title: "Currently: Manager review",
         body: manager
-          ? `${manager} is reviewing this now. You'll get a notification when it moves to the next step — usually within 2 business days.`
-          : "Your manager is reviewing this now. You'll get a notification when it moves to the next step.",
+          ? `${manager} is reviewing the items on policy hold. You'll get a notification when it moves to the next step — usually within 2 business days.`
+          : "Your manager is reviewing the items on policy hold. You'll get a notification when it moves to the next step.",
       };
-    case "Finance_Review":
+    case "fraud_review":
+      return {
+        title: "Currently: Fraud review",
+        body: "At least one item was flagged during fraud screening and is being investigated. Reach out to Finance if you have questions.",
+      };
+    case "finance_review":
       return {
         title: "Currently: Finance review",
         body: "Finance is verifying the claim ahead of disbursement. You'll be notified once it's processed.",
       };
-    case "Flagged_Fraud":
+    case "auto_approved":
       return {
-        title: "Currently: Under investigation",
-        body: "This claim was flagged during fraud screening and is being investigated. Reach out to Finance if you have questions.",
+        title: "Currently: Auto approved",
+        body: "Every item cleared automatically, so no manual review was needed.",
       };
-    case "Approved":
-    case "Auto_Approved":
+    case "approved":
       return {
         title: "Currently: Approved",
         body: "This claim has been approved and is queued for disbursement.",
       };
-    case "Rejected":
+    case "rejected":
       return {
         title: "Currently: Rejected",
         body: "This claim was rejected. Check comments below for details, or contact your manager.",
       };
-    case "Disbursed":
+    case "disbursed":
       return {
         title: "Disbursed",
         body: "Payment has been issued for this claim. It should reflect in your account shortly.",
       };
-    default:
+    case "draft":
       return {
         title: "Currently: Draft",
         body: "This claim hasn't been submitted yet.",

@@ -116,12 +116,12 @@ export default function App() {
   };
 
   // Calculate live stats
-  const pendingCount = claims.filter(c => ['Manager_Review', 'Finance_Review', 'Submitted'].includes(c.status)).length;
-  const flaggedCount = claims.filter(c => c.status === 'Flagged_Fraud' || c.fraudScreening?.isFlagged).length;
-  const autoApprovedCount = claims.filter(c => c.status === 'Auto_Approved').length;
+  const pendingCount = claims.filter(c => ['manager_review', 'finance_review', 'fraud_review', 'submitted'].includes(c.status)).length;
+  const flaggedCount = claims.filter(c => c.status === 'fraud_review' || c.fraudScreening?.isFlagged).length;
+  const autoApprovedCount = claims.filter(c => c.status === 'auto_approved').length;
   const autoApproveRate = claims.length > 0 ? Math.round((autoApprovedCount / claims.length) * 100) : 0;
   const totalDisbursedUSD = claims
-    .filter(c => c.status === 'Disbursed' || c.status === 'Auto_Approved' || c.status === 'Approved')
+    .filter(c => c.status === 'disbursed' || c.status === 'auto_approved' || c.status === 'approved')
     .reduce((acc, c) => acc + c.amountUSD, 0);
 
   // Compute filtered claims based on role active tab
@@ -130,10 +130,10 @@ export default function App() {
       return claims.filter(c => c.employeeId === currentEmployee.id);
     }
     if (activeTab === 'approvals') {
-      return claims.filter(c => ['Manager_Review', 'Submitted', 'Flagged_Fraud'].includes(c.status));
+      return claims.filter(c => ['manager_review', 'submitted', 'fraud_review'].includes(c.status));
     }
     if (activeTab === 'disbursements') {
-      return claims.filter(c => ['Approved', 'Finance_Review', 'Disbursed', 'Auto_Approved'].includes(c.status));
+      return claims.filter(c => ['finance_review', 'approved', 'disbursed', 'auto_approved'].includes(c.status));
     }
     return claims;
   };

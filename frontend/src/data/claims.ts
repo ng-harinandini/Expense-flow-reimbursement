@@ -7,7 +7,12 @@ const RECEIPT_PHOTOS = [
 
 /**
  * Multi-item claims, matching the submit-expense flow: a claim (trip title +
- * date range) groups one or more expense items, each with its own receipt.
+ * date range) groups one or more expense items, each with its own status.
+ *
+ * Claim status is a roll-up of the item statuses: any fraud_flag wins
+ * (fraud_review), otherwise any policy_hold means manager_review, otherwise
+ * everything cleared means auto_approved.
+ *
  * TODO: replace with GET /api/claims once the endpoint returns this shape.
  */
 export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
@@ -19,7 +24,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     claimTitle: 'Business trip-mumbai',
     fromDate: '2026-07-20',
     toDate: '2026-07-24',
-    status: 'Manager_Review',
+    status: 'manager_review',
     items: [
       {
         id: 'item-2001-1',
@@ -30,36 +35,42 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 9800,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'policy_hold',
+        statusReason: 'Fare exceeds the $6,000 flight policy cap for this route.',
       },
       {
         id: 'item-2001-2',
         category: 'Lodging',
-        merchantVendor: 'Taj Lands End',
+        merchantVendor: 'Taj Mumbai Hotel',
         expenseDate: '2026-07-20',
         description: '3-night stay near the client office.',
-        amount: 7200,
+        amount: 6200,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[1],
+        status: 'auto_approved',
       },
       {
         id: 'item-2001-3',
         category: 'Meals',
-        merchantVendor: 'Bademiya',
+        merchantVendor: 'Client dinner',
         expenseDate: '2026-07-21',
-        description: 'Team dinner after the workshop.',
-        amount: 640,
+        description: 'Dinner with the client team after the workshop.',
+        amount: 1050,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'auto_approved',
       },
       {
         id: 'item-2001-4',
         category: 'Ground Transport',
-        merchantVendor: 'Uber',
+        merchantVendor: 'Local transport',
         expenseDate: '2026-07-21',
-        description: 'Airport to hotel transfer.',
-        amount: 410,
+        description: 'Airport and inter-city transfers during the trip.',
+        amount: 1000,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[1],
+        status: 'policy_hold',
+        statusReason: 'No receipt attached for the final $1,000.00 leg.',
       },
     ],
     workflowHistory: [
@@ -89,17 +100,18 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     claimTitle: 'Team offsite - Bangalore',
     fromDate: '2026-06-10',
     toDate: '2026-06-11',
-    status: 'Auto_Approved',
+    status: 'auto_approved',
     items: [
       {
         id: 'item-2002-1',
-        category: 'Meals',
-        merchantVendor: 'Sweetgreen #104',
+        category: 'Ground Transport',
+        merchantVendor: 'Metro card top-up',
         expenseDate: '2026-06-10',
-        description: 'Working lunch with the product team.',
+        description: 'Metro travel to the offsite venue.',
         amount: 38.5,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'auto_approved',
       },
     ],
     workflowHistory: [
@@ -129,7 +141,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     claimTitle: 'Client demo travel',
     fromDate: '2026-05-02',
     toDate: '2026-05-03',
-    status: 'Flagged_Fraud',
+    status: 'fraud_review',
     items: [
       {
         id: 'item-2003-1',
@@ -140,6 +152,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 90,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[1],
+        status: 'auto_approved',
       },
       {
         id: 'item-2003-2',
@@ -150,6 +163,8 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 512,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'fraud_flag',
+        statusReason: 'Receipt total was altered after the original upload.',
       },
     ],
     workflowHistory: [
@@ -179,7 +194,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     claimTitle: 'Conference - AWS re:Invent',
     fromDate: '2025-11-30',
     toDate: '2025-12-04',
-    status: 'Disbursed',
+    status: 'disbursed',
     items: [
       {
         id: 'item-2004-1',
@@ -190,6 +205,8 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 6400,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'manager_approved',
+        statusReason: 'Fare cap waived — conference travel was pre-approved.',
       },
       {
         id: 'item-2004-2',
@@ -200,6 +217,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 5100,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[1],
+        status: 'auto_approved',
       },
       {
         id: 'item-2004-3',
@@ -210,6 +228,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 1800,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'auto_approved',
       },
     ],
     workflowHistory: [
@@ -247,7 +266,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     claimTitle: 'Client onboarding visit',
     fromDate: '2026-07-27',
     toDate: '2026-07-27',
-    status: 'Submitted',
+    status: 'submitted',
     items: [
       {
         id: 'item-2005-1',
@@ -258,6 +277,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 54,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[1],
+        status: 'submitted',
       },
     ],
     workflowHistory: [
@@ -279,7 +299,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     claimTitle: 'Vendor negotiation trip - Chennai',
     fromDate: '2026-07-10',
     toDate: '2026-07-12',
-    status: 'Finance_Review',
+    status: 'finance_review',
     items: [
       {
         id: 'item-2006-1',
@@ -290,6 +310,8 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 5200,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'manager_approved',
+        statusReason: 'Manager cleared the missing-receipt hold with the vendor invoice.',
       },
       {
         id: 'item-2006-2',
@@ -300,6 +322,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 3400,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[1],
+        status: 'auto_approved',
       },
     ],
     workflowHistory: [

@@ -20,23 +20,13 @@ import {
 } from "@/components/ui/select";
 import { INITIAL_MULTI_ITEM_CLAIMS } from "@/data/claims";
 import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
-import { STATUS_LABELS } from "@/components/my_claims/columns";
+import { CLAIM_STATUSES, CLAIM_STATUS_LABELS } from "@/lib/claimStatus";
 import type { Claim, ClaimStatus, WorkflowStepLog } from "@/types";
 
 import { buildColumnDefs } from "./columns";
 import { ClaimReviewDialog } from "./ClaimReviewDialog";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
-
-const STATUS_OPTIONS: ClaimStatus[] = [
-  "Submitted",
-  "Auto_Approved",
-  "Manager_Review",
-  "Finance_Review",
-  "Flagged_Fraud",
-  "Approved",
-  "Disbursed",
-];
 
 const ALL_STATUSES = "all-statuses";
 
@@ -62,7 +52,7 @@ function Approvals() {
         actorRole: "manager",
         stepName: "Manager Review",
         action,
-        status: nextStatus === "Rejected" ? "FAILED" : nextStatus === "Draft" ? "WARNING" : "SUCCESS",
+        status: nextStatus === "rejected" ? "FAILED" : nextStatus === "draft" ? "WARNING" : "SUCCESS",
         notes,
       };
 
@@ -78,18 +68,18 @@ function Approvals() {
   );
 
   const handleApprove = React.useCallback(
-    (claim: Claim) => applyDecision(claim, "Finance_Review", "Approved claim, sent to finance"),
+    (claim: Claim) => applyDecision(claim, "finance_review", "Approved claim, sent to finance"),
     [applyDecision]
   );
 
   const handleReject = React.useCallback(
-    (claim: Claim, reason: string) => applyDecision(claim, "Rejected", "Rejected claim", reason),
+    (claim: Claim, reason: string) => applyDecision(claim, "rejected", "Rejected claim", reason),
     [applyDecision]
   );
 
   const handleSendBack = React.useCallback(
     (claim: Claim, reason: string) =>
-      applyDecision(claim, "Draft", "Sent back to employee for changes", reason),
+      applyDecision(claim, "draft", "Sent back to employee for changes", reason),
     [applyDecision]
   );
 
@@ -158,9 +148,9 @@ function Approvals() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_STATUSES}>All Statuses</SelectItem>
-            {STATUS_OPTIONS.map((option) => (
+            {CLAIM_STATUSES.map((option) => (
               <SelectItem key={option} value={option}>
-                {STATUS_LABELS[option]}
+                {CLAIM_STATUS_LABELS[option]}
               </SelectItem>
             ))}
           </SelectContent>

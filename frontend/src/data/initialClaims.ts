@@ -125,7 +125,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
       rationale: 'Legitimate merchant, realistic amount, no duplicate transactions found.',
       recommendedAction: 'AUTO_APPROVE'
     },
-    status: 'Auto_Approved',
+    status: 'auto_approved',
     workflowHistory: [
       {
         timestamp: '2026-07-22T09:15:00Z',
@@ -244,7 +244,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
       rationale: 'Itemized hotel folio matched perfectly, vendor is a standard corporate hotel chain.',
       recommendedAction: 'MANAGER_REVIEW'
     },
-    status: 'Manager_Review',
+    status: 'manager_review',
     workflowHistory: [
       {
         timestamp: '2026-07-21T14:20:00Z',
@@ -340,7 +340,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
       rationale: 'High probability of artificial transaction splitting to bypass manager review and receipt verification limits.',
       recommendedAction: 'FINANCE_AUDIT'
     },
-    status: 'Flagged_Fraud',
+    status: 'fraud_review',
     workflowHistory: [
       {
         timestamp: '2026-07-23T10:00:00Z',
@@ -460,7 +460,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
       rationale: 'Detailed itemized receipt provided with exact attendee match and compliant drink ratio.',
       recommendedAction: 'MANAGER_REVIEW'
     },
-    status: 'Finance_Review',
+    status: 'finance_review',
     workflowHistory: [
       {
         timestamp: '2026-07-20T11:00:00Z',
@@ -555,7 +555,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
       rationale: 'No fraud indicators, but policy age threshold violated.',
       recommendedAction: 'FINANCE_AUDIT'
     },
-    status: 'Manager_Review',
+    status: 'manager_review',
     workflowHistory: [
       {
         timestamp: '2026-07-23T11:30:00Z',

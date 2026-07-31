@@ -32,29 +32,29 @@ export const ClaimsList: React.FC<ClaimsListProps> = ({
   const getStatusBadge = (status: ClaimStatus) => {
     const safeStatus = (status || '').replace('_', ' ');
     switch (status) {
-      case 'Auto_Approved':
-      case 'Approved':
-      case 'Disbursed':
+      case 'auto_approved':
+      case 'approved':
+      case 'disbursed':
         return (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
             <CheckCircle2 className="w-3 h-3 mr-1" /> {safeStatus}
           </span>
         );
-      case 'Manager_Review':
-      case 'Finance_Review':
-      case 'Submitted':
+      case 'manager_review':
+      case 'finance_review':
+      case 'submitted':
         return (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-300 border border-amber-500/30">
             <Clock className="w-3 h-3 mr-1" /> {safeStatus}
           </span>
         );
-      case 'Flagged_Fraud':
+      case 'fraud_review':
         return (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-rose-500/10 text-rose-400 border border-rose-500/30 font-semibold animate-pulse">
             <ShieldAlert className="w-3 h-3 mr-1" /> Flagged Fraud
           </span>
         );
-      case 'Rejected':
+      case 'rejected':
         return (
           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700">
             <XCircle className="w-3 h-3 mr-1" /> Rejected
@@ -123,12 +123,14 @@ export const ClaimsList: React.FC<ClaimsListProps> = ({
           className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         >
           <option value="ALL">All Statuses</option>
-          <option value="Auto_Approved">Auto Approved</option>
-          <option value="Manager_Review">Manager Review</option>
-          <option value="Finance_Review">Finance Review</option>
-          <option value="Flagged_Fraud">Flagged Fraud</option>
-          <option value="Approved">Approved</option>
-          <option value="Disbursed">Disbursed</option>
+          <option value="submitted">Submitted</option>
+          <option value="auto_approved">Auto Approved</option>
+          <option value="manager_review">Manager Review</option>
+          <option value="fraud_review">Fraud Review</option>
+          <option value="finance_review">Finance Review</option>
+          <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
+          <option value="disbursed">Disbursed</option>
         </select>
       </div>
 

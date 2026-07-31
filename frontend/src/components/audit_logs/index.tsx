@@ -123,10 +123,10 @@ function AuditLogs() {
 
         <Select defaultValue={ALL_ACTORS}>
           <SelectTrigger className="h-9 text-foreground sm:w-44">
-            <SelectValue placeholder="All actors" />
+            <SelectValue placeholder="All employees" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={ALL_ACTORS}>All actors</SelectItem>
+            <SelectItem value={ALL_ACTORS}>All employees</SelectItem>
             {actorOptions.map((option) => (
               <SelectItem key={option} value={option}>
                 {option}
@@ -155,7 +155,7 @@ function AuditLogs() {
             <tr className="border-b text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               <th className="w-10 py-3" />
               <th className="py-3 pr-4">Claim Ref</th>
-              <th className="py-3 pr-4">Actors Involved</th>
+              <th className="py-3 pr-4">Employees Involved</th>
               <th className="py-3 pr-4">Events</th>
               <th className="py-3 pr-4">Last Activity</th>
               <th className="py-3 pr-4">Status</th>
