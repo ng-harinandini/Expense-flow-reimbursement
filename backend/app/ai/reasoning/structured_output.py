@@ -3,9 +3,10 @@
 Deliberately not the ``jsonschema`` package — this platform's convention (see
 ``app.ai.embeddings.math``'s "no numpy" docstring) is to avoid a dependency for a handful of
 checks a call site actually needs. Supports exactly what this platform's own tool/reasoning output
-shapes use: ``type`` (object/string/integer/number/boolean/array/null), ``required``,
-``properties``, ``items``, and a plain list of ``enum`` values — enough for "structured output is
-schema-validated before it leaves the platform" without pulling in a general-purpose schema engine.
+shapes use: ``type`` (object/string/integer/number/boolean/array/null, or a list of those for a
+nullable field), ``required``, ``properties``, ``items``, and a plain list of ``enum`` values —
+enough for "structured output is schema-validated before it leaves the platform" without pulling in
+a general-purpose schema engine.
 """
 
 from __future__ import annotations
@@ -49,7 +50,16 @@ def _validate(payload: Any, schema: Mapping[str, Any], *, path: str, errors: lis
         _validate_array(payload, schema, path=path, errors=errors)
 
 
-def _matches_type(payload: Any, expected_type: str) -> bool:
+def _matches_type(payload: Any, expected_type: Any) -> bool:
+    """Whether ``payload`` matches ``expected_type``, which may be a name or a list of names.
+
+    The list form (``{"type": ["number", "null"]}``) is how JSON Schema spells a nullable field,
+    and is what a model emits against a nullable column. It used to reach ``dict.get`` unhashed
+    and raise ``TypeError``, turning a legal schema into a crash rather than a verdict — and this
+    validator's contract is that invalidity is *data*, never an exception.
+    """
+    if isinstance(expected_type, (list, tuple)):
+        return any(_matches_type(payload, option) for option in expected_type)
     checker = _TYPE_CHECKS.get(expected_type)
     if checker is None:
         return True  # an unknown type name is not this validator's job to reject

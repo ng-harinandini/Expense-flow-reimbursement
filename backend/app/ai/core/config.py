@@ -142,13 +142,36 @@ class AISettings(BaseSettings):
     TEI_PASSAGE_PREFIX: str = ""
 
     # --- LLM (advisory only — never a decision maker) -----------------------
-    LLM_PROVIDER: str = "none"              # none | bedrock | gemini | openai | anthropic
+    LLM_PROVIDER: str = "none"              # none | bedrock
+    #: Bedrock model id. The ``anthropic.`` prefix is added if absent, so either form works.
     LLM_MODEL: Optional[str] = None
     LLM_TIMEOUT_SECONDS: float = 45.0
-    LLM_MAX_OUTPUT_TOKENS: int = 1024
-    LLM_TEMPERATURE: float = 0.0            # advisory text must be as reproducible as possible
+    #: Bounds thinking **plus** reply text, not just the reply. The old 1024 default truncated a
+    #: structured extraction mid-object once adaptive thinking was on; ~16k is also the ceiling
+    #: below which a non-streaming request stays clear of HTTP timeouts.
+    LLM_MAX_OUTPUT_TOKENS: int = 16_000
+    #: Thinking depth and overall token spend: low | medium | high | xhigh | max.
+    #: Replaces the removed ``budget_tokens`` — there is no longer a thinking-token budget.
+    LLM_EFFORT: str = "high"
+    #: ``summarized`` returns a readable summary of the reasoning; ``omitted`` (the default) leaves
+    #: the thinking text empty. Visibility only — thinking happens and is billed either way.
+    LLM_THINKING_DISPLAY: Literal["omitted", "summarized"] = "omitted"
+    #: **Ignored by the Bedrock provider.** Current Claude models reject a non-default sampling
+    #: parameter outright, so forwarding this would 400 every request; steering belongs in the
+    #: prompt. Retained because it is part of the settings contract other providers may honour.
+    LLM_TEMPERATURE: float = 0.0
     BEDROCK_REGION: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
+
+    # --- policy rule extraction ---------------------------------------------
+    #: Token ceiling for one section's extraction prompt. A section over this is split further
+    #: rather than sent whole: a 500-page policy has sections far larger than any context window,
+    #: and a prompt that silently overflows loses the tail of the section with no error.
+    EXTRACTION_MAX_SECTION_TOKENS: int = 6_000
+    #: Minimum detector confidence for a heading candidate to become a real section boundary.
+    #: Below this the candidate is discarded and the text stays in the section already open — a
+    #: wrong split is worse than a missed one, because it can cut a limits table in half.
+    EXTRACTION_MIN_HEURISTIC_CONFIDENCE: float = 0.5
 
     # --- caching (Task 15) --------------------------------------------------
     CACHE_BACKEND: Literal["memory", "redis", "none"] = "memory"

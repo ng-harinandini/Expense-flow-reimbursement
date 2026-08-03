@@ -11,10 +11,17 @@ from __future__ import annotations
 from app.ai.prompts.builtin.definitions import BuiltinPrompt
 from app.ai.prompts.builtin.fraud_explanation import FRAUD_EXPLANATION_PROMPT
 from app.ai.prompts.builtin.policy_explanation import POLICY_EXPLANATION_PROMPT
+from app.ai.prompts.builtin.policy_rule_extraction import POLICY_RULE_EXTRACTION_PROMPT
+from app.ai.prompts.builtin.policy_section_boundary import POLICY_SECTION_BOUNDARY_PROMPT
 from app.ai.prompts.registry import PromptRegistry
 from app.domain.actor import Actor
 
-BUILTIN_PROMPTS: tuple[BuiltinPrompt, ...] = (POLICY_EXPLANATION_PROMPT, FRAUD_EXPLANATION_PROMPT)
+BUILTIN_PROMPTS: tuple[BuiltinPrompt, ...] = (
+    POLICY_EXPLANATION_PROMPT,
+    FRAUD_EXPLANATION_PROMPT,
+    POLICY_RULE_EXTRACTION_PROMPT,
+    POLICY_SECTION_BOUNDARY_PROMPT,
+)
 
 
 def register_builtin_prompts(registry: PromptRegistry, *, actor: Actor) -> list[object]:

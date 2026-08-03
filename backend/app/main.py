@@ -13,6 +13,7 @@ from app.ai.api import admin as ai_admin_api
 from app.ai.api import duplicates as ai_duplicates_api
 from app.ai.api import health as ai_health_api
 from app.ai.api import knowledge as ai_knowledge_api
+from app.ai.api import policy_extraction as ai_policy_extraction_api
 from app.ai.api import search as ai_search_api
 from app.api import (
     admin_users,
@@ -23,6 +24,7 @@ from app.api import (
     claims,
     expense_items,
     health,
+    policy_rule_proposals,
     policy_rules,
     roles,
 )
@@ -58,6 +60,7 @@ register_exception_handlers(app)
 # Register API routers under /api prefix
 app.include_router(claims.router, prefix=settings.API_PREFIX)
 app.include_router(policy_rules.router, prefix=settings.API_PREFIX)
+app.include_router(policy_rule_proposals.router, prefix=settings.API_PREFIX)
 app.include_router(audit_logs.router, prefix=settings.API_PREFIX)
 app.include_router(ai.router, prefix=settings.API_PREFIX)
 app.include_router(aws.router, prefix=settings.API_PREFIX)
@@ -66,6 +69,7 @@ app.include_router(expense_items.router, prefix=settings.API_PREFIX)
 app.include_router(auth.router, prefix=settings.API_PREFIX)
 app.include_router(admin_users.router, prefix=settings.API_PREFIX)
 app.include_router(ai_knowledge_api.router, prefix=settings.API_PREFIX)
+app.include_router(ai_policy_extraction_api.router, prefix=settings.API_PREFIX)
 app.include_router(ai_search_api.router, prefix=settings.API_PREFIX)
 app.include_router(ai_duplicates_api.router, prefix=settings.API_PREFIX)
 app.include_router(ai_admin_api.router, prefix=settings.API_PREFIX)

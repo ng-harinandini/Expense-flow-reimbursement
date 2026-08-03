@@ -20,6 +20,12 @@ from app.ai.models.knowledge import (  # noqa: F401
     KnowledgeIngestionRun,
     TenantMixin,
 )
+from app.ai.models.policy_proposal import (  # noqa: F401
+    PolicyDocumentPage,
+    PolicyDocumentSection,
+    PolicyRuleProposal,
+    PolicyRuleProposalItem,
+)
 from app.ai.models.prompt import PromptTemplate  # noqa: F401
 
 __all__ = [
@@ -31,6 +37,10 @@ __all__ = [
     "KnowledgeDocument",
     "KnowledgeEmbedding",
     "KnowledgeIngestionRun",
+    "PolicyDocumentPage",
+    "PolicyDocumentSection",
+    "PolicyRuleProposal",
+    "PolicyRuleProposalItem",
     "PromptTemplate",
     "RegistryEntry",
     "TenantMixin",

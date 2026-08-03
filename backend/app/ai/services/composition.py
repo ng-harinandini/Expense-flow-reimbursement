@@ -9,6 +9,8 @@ themselves built per call, never as a shared singleton, because they are bound t
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy.orm import Session
 
 from app.ai.duplicate_detection.service import DuplicateDetectionService
@@ -20,6 +22,9 @@ from app.ai.providers.rerank import resolve_rerank_provider
 from app.ai.registry.flags import feature_flags
 from app.ai.reranking.service import RerankService
 from app.ai.vector_store.factory import resolve_vector_store
+
+if TYPE_CHECKING:
+    from app.ai.policy_extraction.service import PolicyRuleExtractionService
 
 
 def build_ingestion_providers(session: Session) -> tuple[EmbeddingService, VectorStore]:
@@ -67,8 +72,47 @@ def build_duplicate_detection_service(
     )
 
 
+def build_policy_rule_extraction_service(session: Session) -> "PolicyRuleExtractionService":
+    """The fully-wired :class:`PolicyRuleExtractionService` for one request's session.
+
+    ``resolve_llm_provider()`` raises (503) rather than degrading when no LLM is configured — unlike
+    the embedding and rerank resolvers, there is no fallback provider here, because a stub that
+    invented policy limits would be worse than an outright unavailable error. See
+    ``app/ai/providers/llm/__init__.py`` for why.
+
+    The extraction pipeline's stages are assembled here rather than inside the service so each stays
+    injectable: a test supplies a fake ``PolicyExtractor`` and needs no provider, and swapping the
+    sequential executor for a parallel one later is a change to this function alone.
+    """
+    from app.ai.policy_extraction.extractor import LLMPolicyExtractor, LLMSubsectionAdvisor
+    from app.ai.policy_extraction.orchestrator import PolicyExtractionOrchestrator
+    from app.ai.policy_extraction.service import PolicyRuleExtractionService
+    from app.ai.providers.llm import resolve_llm_provider
+    from app.ai.repositories.knowledge_repository import KnowledgeChunkRepository
+    from app.ai.repositories.policy_proposal_repository import (
+        PolicyDocumentPageRepository,
+        PolicyDocumentSectionRepository,
+        PolicyRuleProposalRepository,
+    )
+
+    llm_provider = resolve_llm_provider()
+    return PolicyRuleExtractionService(
+        orchestrator=PolicyExtractionOrchestrator(
+            chunk_repository=KnowledgeChunkRepository(session),
+            proposal_repository=PolicyRuleProposalRepository(session),
+            page_repository=PolicyDocumentPageRepository(session),
+            section_repository=PolicyDocumentSectionRepository(session),
+            extractor=LLMPolicyExtractor(llm_provider=llm_provider),
+            # Only consulted for a section too large to send whole; a document whose sections all
+            # fit never reaches it and pays nothing for it.
+            subsection_advisor=LLMSubsectionAdvisor(llm_provider=llm_provider),
+        )
+    )
+
+
 __all__ = [
     "build_duplicate_detection_service",
     "build_ingestion_providers",
     "build_knowledge_service",
+    "build_policy_rule_extraction_service",
 ]

@@ -9,6 +9,13 @@ sqlalchemy>=2.0
 alembic>=1.13
 psycopg[binary]>=3.1
 boto3>=1.34
+# Official Anthropic SDK, Bedrock flavour — used by app/ai/providers/llm/bedrock.py for policy-rule
+# extraction. The Bedrock extra brings the SigV4 plumbing the AnthropicBedrockMantle client needs.
+# Chosen over a hand-rolled boto3 `invoke_model` body because the Messages-API surface is what
+# exposes `output_config.format` (server-side JSON-schema constraint) and adaptive thinking; both
+# would otherwise have to be assembled and parsed by hand. The import is guarded, so a host without
+# this package still boots and reports the LLM provider unavailable rather than failing at startup.
+anthropic[bedrock]>=0.40
 python-dateutil>=2.8
 python-jose[cryptography]>=3.3
 pytest>=7.0

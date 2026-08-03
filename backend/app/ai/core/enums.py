@@ -86,6 +86,10 @@ class IngestionStage(_WireEnum):
     EMBED = "EMBED"
     INDEX = "INDEX"
     FINALIZE = "FINALIZE"
+    #: Not run by ``ingest_document`` — a later, separate step over an already-indexed document.
+    #: ``VARCHAR``, so adding it needs no migration; recorded on ``knowledge_ingestion_runs`` only
+    #: if a future caller chooses to track extraction through the same run-tracker convention.
+    EXTRACT_RULES = "EXTRACT_RULES"
 
 
 class ChunkStrategy(_WireEnum):
@@ -225,6 +229,53 @@ class PromptStatus(_WireEnum):
     RETIRED = "RETIRED"
 
 
+class LimitBasis(_WireEnum):
+    """What a monetary limit is measured *per*.
+
+    The dimension ``policy_rules`` has no column for: it stores a scalar ``expense_limit``, so
+    "$40 per day" and "$40 per claim" are indistinguishable once written. A policy document states
+    both, and conflating them changes which claims pass — so an extracted limit carries its basis
+    here, on the proposal, where a reviewer can see it before publishing.
+
+    ``FORMULA``, ``AGREEMENT`` and ``OTHER`` are the non-scalar cases: a rate multiplied by
+    distance, a per-agreement amount, and anything else money cannot express. Those keep their
+    wording in ``limit_expression`` and carry no amount at all.
+
+    ``VARCHAR``: new bases are a routine future addition and must not need a migration.
+    """
+
+    PER_DAY = "PER_DAY"
+    PER_TRIP = "PER_TRIP"
+    PER_NIGHT = "PER_NIGHT"
+    PER_EVENT = "PER_EVENT"
+    PER_MONTH = "PER_MONTH"
+    PER_YEAR = "PER_YEAR"
+    PER_CLAIM = "PER_CLAIM"
+    PER_PERSON_PER_EVENT = "PER_PERSON_PER_EVENT"
+    PER_MILE = "PER_MILE"
+    PER_TOOL_PER_YEAR = "PER_TOOL_PER_YEAR"
+    PER_RECIPIENT_PER_YEAR = "PER_RECIPIENT_PER_YEAR"
+    FORMULA = "FORMULA"
+    AGREEMENT = "AGREEMENT"
+    OTHER = "OTHER"
+
+
+class ProposalStatus(_WireEnum):
+    """Lifecycle of an extracted rule set awaiting human review.
+
+    A closed set with a guard requirement — approving twice, or approving something already
+    rejected, must be impossible — so this is a native PG enum rather than a ``VARCHAR``.
+
+    ``SUPERSEDED`` is set when a newer extraction of the same document arrives: the older proposal
+    stays readable as the record of what was proposed at the time, rather than being deleted.
+    """
+
+    DRAFT = "DRAFT"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    SUPERSEDED = "SUPERSEDED"
+
+
 # --- Native PostgreSQL enum types --------------------------------------------
 # Only the closed, slow-changing vocabularies get a database type; see the module docstring.
 
@@ -232,11 +283,13 @@ DOCUMENT_STATUS_ENUM_NAME = "ai_document_status"
 INGESTION_STATUS_ENUM_NAME = "ai_ingestion_status"
 PROMPT_STATUS_ENUM_NAME = "ai_prompt_status"
 DUPLICATE_VERDICT_ENUM_NAME = "ai_duplicate_verdict"
+PROPOSAL_STATUS_ENUM_NAME = "ai_proposal_status"
 
 document_status_enum = _pg_enum(DocumentStatus, DOCUMENT_STATUS_ENUM_NAME)
 ingestion_status_enum = _pg_enum(IngestionStatus, INGESTION_STATUS_ENUM_NAME)
 prompt_status_enum = _pg_enum(PromptStatus, PROMPT_STATUS_ENUM_NAME)
 duplicate_verdict_enum = _pg_enum(DuplicateVerdict, DUPLICATE_VERDICT_ENUM_NAME)
+proposal_status_enum = _pg_enum(ProposalStatus, PROPOSAL_STATUS_ENUM_NAME)
 
 
 __all__ = [
@@ -252,9 +305,12 @@ __all__ = [
     "IngestionStage",
     "IngestionStatus",
     "KnowledgeSourceType",
+    "LimitBasis",
     "PIIKind",
     "PROMPT_STATUS_ENUM_NAME",
+    "PROPOSAL_STATUS_ENUM_NAME",
     "PromptStatus",
+    "ProposalStatus",
     "ProviderKind",
     "RedactionMode",
     "RetrievalStrategy",
@@ -263,4 +319,5 @@ __all__ = [
     "duplicate_verdict_enum",
     "ingestion_status_enum",
     "prompt_status_enum",
+    "proposal_status_enum",
 ]
