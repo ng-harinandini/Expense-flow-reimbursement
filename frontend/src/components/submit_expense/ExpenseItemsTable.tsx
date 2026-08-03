@@ -95,7 +95,9 @@ export function ExpenseItemsTable({ items, onEdit, onDelete }: ExpenseItemsTable
                     </span>
                   </td>
                   <td className="px-3 py-3 whitespace-nowrap text-muted-foreground">
-                    {item.expenseDate}
+                    {item.expenseToDate && item.expenseToDate !== item.expenseFromDate && (
+                      <> &ndash; {item.expenseToDate}</>
+                    )}
                   </td>
                   <td className="px-3 py-3">
                     <span className="block max-w-56 truncate text-muted-foreground">

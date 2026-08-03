@@ -10,7 +10,6 @@ import { MAX_EXPENSE_ITEMS, formatUsd, type ExpenseItemDraft } from "./helpers";
 
 interface ExpenseItemsSectionProps {
   items: ExpenseItemDraft[];
-  canAddItem: boolean;
   onAddClick: () => void;
   onEdit: (item: ExpenseItemDraft) => void;
   onDelete: (item: ExpenseItemDraft) => void;
@@ -21,7 +20,6 @@ interface ExpenseItemsSectionProps {
 
 export function ExpenseItemsSection({
   items,
-  canAddItem,
   onAddClick,
   onEdit,
   onDelete,
@@ -40,22 +38,18 @@ export function ExpenseItemsSection({
             <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-secondary/20">
               <DollarSign className="size-4 text-secondary" />
             </div>
-            <h3 className="text-base font-semibold text-foreground">Expense items</h3>
+            <h3 className="text-base font-semibold text-foreground">
+              Expense items
+            </h3>
           </div>
 
           <Button
             type="button"
             variant="outline"
             onClick={onAddClick}
-            disabled={!canAddItem || atMaxItems}
+            disabled={atMaxItems}
             className="border-secondary/40 text-secondary hover:bg-secondary/5 hover:text-secondary"
-            title={
-              !canAddItem
-                ? "Fill in the claim title, from date, and to date first"
-                : atMaxItems
-                  ? "Maximum of 10 items reached"
-                  : undefined
-            }
+            title={atMaxItems ? "Maximum of 10 items reached" : undefined}
           >
             <Plus />
             Add Expense Item
@@ -66,7 +60,11 @@ export function ExpenseItemsSection({
         </div>
 
         <div className="mt-1.5">
-          <ExpenseItemsTable items={items} onEdit={onEdit} onDelete={onDelete} />
+          <ExpenseItemsTable
+            items={items}
+            onEdit={onEdit}
+            onDelete={onDelete}
+          />
         </div>
       </div>
 
@@ -82,7 +80,9 @@ export function ExpenseItemsSection({
           {formatUsd(totalAmount)})
           <ArrowRight />
         </Button>
-        {raiseClaimError && <p className="text-xs text-destructive">{raiseClaimError}</p>}
+        {raiseClaimError && (
+          <p className="text-xs text-destructive">{raiseClaimError}</p>
+        )}
       </div>
     </div>
   );

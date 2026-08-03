@@ -2,7 +2,19 @@ import * as yup from "yup";
 
 export const expenseItemSchema = yup.object({
   merchantVendor: yup.string().trim().required("Merchant / vendor is required"),
-  expenseDate: yup.string().required("Expense date is required"),
+  expenseFromDate: yup.string().required("Expense from date is required"),
+  expenseToDate: yup
+    .string()
+    .required("Expense to date is required")
+    .test(
+      "to-not-before-from",
+      "To date can't be before the from date",
+      function toNotBeforeFrom(value) {
+        const { expenseFromDate } = this.parent as { expenseFromDate?: string };
+        if (!value || !expenseFromDate) return true;
+        return new Date(value) >= new Date(expenseFromDate);
+      }
+    ),
   category: yup.string().trim().required("Category is required"),
   amount: yup
     .number()
@@ -26,7 +38,8 @@ export type ExpenseItemFormValues = yup.InferType<typeof expenseItemSchema>;
 
 export const EXPENSE_ITEM_FORM_DEFAULTS: ExpenseItemFormValues = {
   merchantVendor: "",
-  expenseDate: "",
+  expenseFromDate: "",
+  expenseToDate: "",
   category: "",
   amount: undefined as unknown as number,
   taxAmount: undefined,

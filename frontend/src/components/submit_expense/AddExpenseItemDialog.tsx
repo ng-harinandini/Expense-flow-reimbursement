@@ -4,15 +4,18 @@ import * as React from "react";
 import { useForm } from "react-hook-form";
 import { yupResolver } from "@hookform/resolvers/yup";
 import {
+  AlertTriangle,
   Calendar,
   CreditCard,
   DollarSign,
-  FileText,
   Percent,
   Sparkles,
   Store,
   Tag,
 } from "lucide-react";
+
+import { uploadReceipt, type ReceiptExtraction } from "@/api/expenseItems";
+import { getErrorMessage } from "@/lib/apiError";
 
 import {
   Dialog,
@@ -64,11 +67,19 @@ export function AddExpenseItemDialog({
   const [receipt, setReceipt] = React.useState<File | null>(null);
   const [isExtracting, setIsExtracting] = React.useState(false);
   const [isExtracted, setIsExtracted] = React.useState(false);
+  const [extraction, setExtraction] = React.useState<ReceiptExtraction | null>(null);
+  const [extractionError, setExtractionError] = React.useState<string | null>(null);
+
+  // Aborts the in-flight upload when the receipt is swapped or removed, so a slow
+  // earlier response can't land after a newer one and overwrite the form.
+  const uploadRef = React.useRef<AbortController | null>(null);
+  React.useEffect(() => () => uploadRef.current?.abort(), []);
 
   const {
     register,
     handleSubmit,
     reset,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<ExpenseItemFormValues>({
     resolver: yupResolver(expenseItemSchema),
@@ -80,40 +91,107 @@ export function AddExpenseItemDialog({
     if (!open) return;
 
     if (editingItem) {
-      const { id, receiptFile, receiptFileName, receiptPreviewUrl, isPdf, ...values } =
-        editingItem;
+      const {
+        id,
+        receiptFile,
+        receiptFileName,
+        receiptPreviewUrl,
+        isPdf,
+        extraction: savedExtraction,
+        ...values
+      } = editingItem;
       reset(values);
       setReceipt(receiptFile);
       setIsExtracting(false);
       setIsExtracted(true);
+      // Carried over so re-confirming an edited item keeps the provenance the
+      // submit call needs; the receipt is not re-uploaded just to edit a field.
+      setExtraction(savedExtraction);
+      setExtractionError(null);
     } else {
       reset(EXPENSE_ITEM_FORM_DEFAULTS);
       setReceipt(null);
       setIsExtracting(false);
       setIsExtracted(false);
+      setExtraction(null);
+      setExtractionError(null);
     }
   }, [open, editingItem, reset]);
 
   const fieldsEnabled = Boolean(receipt) && !isExtracting;
   const isPdf = receipt?.type === "application/pdf";
 
-  const handleFileAccepted = (file: File) => {
+  const handleFileAccepted = async (file: File) => {
+    uploadRef.current?.abort();
+    const controller = new AbortController();
+    uploadRef.current = controller;
+
     setReceipt(file);
     setIsExtracted(false);
+    setExtraction(null);
+    setExtractionError(null);
     setIsExtracting(true);
-    // TODO: replace with the real receipt-extraction API call.
-    // While that request is pending, ReceiptDropzone shows the scan-sweep
-    // overlay on top of the uploaded image preview.
-    setTimeout(() => {
-      setIsExtracting(false);
+
+    try {
+      // While this is pending, ReceiptDropzone shows the scan-sweep overlay on
+      // top of the uploaded image preview.
+      const result = await uploadReceipt(file, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+
+      setExtraction(result);
+      applyPrefill(result);
+      // A failed extraction still returns 200 with the stored file — the user
+      // fills the fields in by hand rather than losing the upload.
+      setExtractionError(result.errorMessage ?? null);
       setIsExtracted(true);
-    }, 2200);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setExtractionError(
+        getErrorMessage(error, "Could not scan the receipt. Enter the details manually.")
+      );
+      // Fields are unlocked anyway so a scan failure never blocks the claim.
+      setIsExtracted(true);
+    } finally {
+      if (!controller.signal.aborted) setIsExtracting(false);
+    }
+  };
+
+  /** Writes the server's suggestions into the form as editable defaults. */
+  const applyPrefill = (result: ReceiptExtraction) => {
+    if (result.suggestedVendor) {
+      setValue("merchantVendor", result.suggestedVendor, { shouldValidate: true });
+    }
+    if (result.suggestedDate) {
+      // The date input needs yyyy-MM-dd; anything else is left for the user.
+      const date = result.suggestedDate.slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        setValue("expenseFromDate", date, { shouldValidate: true });
+        setValue("expenseToDate", date, { shouldValidate: true });
+      }
+    }
+    if (typeof result.suggestedAmount === "number") {
+      setValue("amount", result.suggestedAmount, { shouldValidate: true });
+    }
+    // Parse tax from extraction fields (e.g. { fieldType: "TAX", fieldValue: "$24.96" })
+    const fields = (result.extraction?.fields as Array<{ fieldType: string; fieldValue: string }> | undefined) ?? [];
+    const taxField = fields.find((f) => f.fieldType === "TAX");
+    if (taxField) {
+      const taxValue = parseFloat(taxField.fieldValue.replace(/[^\d.]/g, ""));
+      if (!Number.isNaN(taxValue)) {
+        setValue("taxAmount", taxValue, { shouldValidate: true });
+      }
+    }
+    // No category prefill: the endpoint only echoes back a hint we don't send,
+    // so the user always picks it. See ReceiptExtraction.suggestedCategory.
   };
 
   const handleFileRemoved = () => {
+    uploadRef.current?.abort();
     setReceipt(null);
     setIsExtracting(false);
     setIsExtracted(false);
+    setExtraction(null);
+    setExtractionError(null);
     reset(EXPENSE_ITEM_FORM_DEFAULTS);
   };
 
@@ -129,6 +207,7 @@ export function AddExpenseItemDialog({
       receiptFileName: receipt.name,
       receiptPreviewUrl,
       isPdf: Boolean(isPdf),
+      extraction,
     });
     onOpenChange(false);
   };
@@ -147,10 +226,29 @@ export function AddExpenseItemDialog({
         <form onSubmit={handleSubmit(onSubmit)}>
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-[35fr_65fr]">
             <div className="flex flex-col gap-3">
-              {receipt && isExtracted && (
+              {receipt && isExtracted && !extractionError && (
                 <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-primary">
                   <Sparkles className="size-3.5 shrink-0" />
                   Receipt scanned — review the auto-filled details before confirming.
+                </div>
+              )}
+
+              {extractionError && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-700 dark:text-amber-400">
+                  <AlertTriangle className="mt-px size-3.5 shrink-0" />
+                  <span>{extractionError}</span>
+                </div>
+              )}
+
+              {/* Advisory only — a repeat receipt is legitimate after a rejection,
+                  so this never blocks confirming the item. */}
+              {extraction?.duplicateOfClaimNumber && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-700 dark:text-amber-400">
+                  <AlertTriangle className="mt-px size-3.5 shrink-0" />
+                  <span>
+                    This receipt was already uploaded on claim{" "}
+                    {extraction.duplicateOfClaimNumber}.
+                  </span>
                 </div>
               )}
               <ReceiptDropzone
@@ -185,21 +283,41 @@ export function AddExpenseItemDialog({
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="expenseDate">Expense date</Label>
+                  <Label htmlFor="expenseFromDate">Expense from date</Label>
                   <div className="relative">
                     <Calendar className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
-                      id="expenseDate"
+                      id="expenseFromDate"
                       type="date"
                       disabled={!fieldsEnabled}
-                      aria-invalid={!!errors.expenseDate}
+                      aria-invalid={!!errors.expenseFromDate}
                       className="pl-9"
-                      {...register("expenseDate")}
+                      {...register("expenseFromDate")}
                     />
                   </div>
-                  {errors.expenseDate && (
+                  {errors.expenseFromDate && (
                     <p className="text-xs text-destructive">
-                      {errors.expenseDate.message}
+                      {errors.expenseFromDate.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="expenseToDate">Expense to date</Label>
+                  <div className="relative">
+                    <Calendar className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="expenseToDate"
+                      type="date"
+                      disabled={!fieldsEnabled}
+                      aria-invalid={!!errors.expenseToDate}
+                      className="pl-9"
+                      {...register("expenseToDate")}
+                    />
+                  </div>
+                  {errors.expenseToDate && (
+                    <p className="text-xs text-destructive">
+                      {errors.expenseToDate.message}
                     </p>
                   )}
                 </div>

@@ -13,6 +13,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import type { ReceiptExtraction } from "@/api/expenseItems";
+
 import type { ExpenseItemFormValues } from "./expenseItemSchema";
 
 export interface ReceiptDropzoneProps {
@@ -85,6 +87,7 @@ export interface ExpenseItemDraft extends ExpenseItemFormValues {
   /** Data URL for the table thumbnail; null for file types with no visual preview (e.g. PDF). */
   receiptPreviewUrl: string | null;
   isPdf: boolean;
+  extraction: ReceiptExtraction | null;
 }
 
 export function generateItemId() {

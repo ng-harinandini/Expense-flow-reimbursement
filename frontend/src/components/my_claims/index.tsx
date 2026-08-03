@@ -20,7 +20,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { INITIAL_MULTI_ITEM_CLAIMS } from "@/data/claims";
+import { getClaims } from "@/api/claims";
+import { getErrorMessage } from "@/lib/apiError";
 import type { Claim, ClaimStatus } from "@/types";
 
 import { buildColumnDefs, STATUS_LABELS } from "./columns";
@@ -46,6 +47,20 @@ function MyClaims() {
   const [status, setStatus] = React.useState<string>(ALL_STATUSES);
   const [selectedClaim, setSelectedClaim] = React.useState<Claim | null>(null);
   const [isDetailOpen, setIsDetailOpen] = React.useState(false);
+  const [allClaims, setAllClaims] = React.useState<Claim[]>([]);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [fetchError, setFetchError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+    setFetchError(null);
+    getClaims()
+      .then((data) => { if (!cancelled) setAllClaims(data); })
+      .catch((err) => { if (!cancelled) setFetchError(getErrorMessage(err, "Failed to load claims.")); })
+      .finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   const handleView = React.useCallback((claim: Claim) => {
     setSelectedClaim(claim);
@@ -60,7 +75,7 @@ function MyClaims() {
   const rowData = React.useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return INITIAL_MULTI_ITEM_CLAIMS.filter((claim) => {
+    return allClaims.filter((claim) => {
       const matchesSearch =
         !query ||
         claim.claimNumber.toLowerCase().includes(query) ||
@@ -71,7 +86,7 @@ function MyClaims() {
 
       return matchesSearch && matchesStatus;
     });
-  }, [search, status]);
+  }, [search, status, allClaims]);
 
   const defaultColDef = React.useMemo<ColDef>(
     () => ({
@@ -134,17 +149,24 @@ function MyClaims() {
       </div>
 
       <div className="h-[560px] px-6 pb-6">
-        <AgGridReact<Claim>
-          theme={themeQuartz}
-          rowData={rowData}
-          columnDefs={columnDefs}
-          defaultColDef={defaultColDef}
-          overlayNoRowsTemplate="No claims found matching your filter criteria."
-          domLayout="normal"
-          rowHeight={56}
-          headerHeight={44}
-          suppressCellFocus
-        />
+        {fetchError ? (
+          <div className="flex h-full items-center justify-center text-sm text-destructive">
+            {fetchError}
+          </div>
+        ) : (
+          <AgGridReact<Claim>
+            theme={themeQuartz}
+            rowData={rowData}
+            columnDefs={columnDefs}
+            defaultColDef={defaultColDef}
+            loading={isLoading}
+            overlayNoRowsTemplate="No claims found matching your filter criteria."
+            domLayout="normal"
+            rowHeight={56}
+            headerHeight={44}
+            suppressCellFocus
+          />
+        )}
       </div>
 
       <ClaimDetailDialog
