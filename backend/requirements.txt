@@ -9,6 +9,7 @@ sqlalchemy>=2.0
 alembic>=1.13
 psycopg[binary]>=3.1
 boto3>=1.34
+sshtunnel>=0.4          # optional SSH tunnel to a bastion when DB_HOST is only reachable that way
 python-dateutil>=2.8
 python-jose[cryptography]>=3.3
 pytest>=7.0

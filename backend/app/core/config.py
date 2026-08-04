@@ -39,11 +39,24 @@ class Settings(BaseSettings):
     DB_HOST: Optional[str] = None
     DB_PORT: int = 5432
     DB_NAME: Optional[str] = None
+    #: search_path pinned on every connection so queries don't need a schema prefix.
+    DB_SCHEMA: Optional[str] = None
 
     # SQLAlchemy engine pool tuning
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
     DB_POOL_RECYCLE_SECONDS: int = 1800
+
+    # --- SSH tunnel (optional) ---
+    # When the database sits in a private VPC, set SSH_TUNNEL_ENABLED=true and point these at a
+    # bastion host; the tunnel's local port is then used instead of DB_HOST/DB_PORT directly.
+    SSH_TUNNEL_ENABLED: bool = False
+    SSH_HOST: Optional[str] = None
+    SSH_PORT: int = 22
+    SSH_USER: str = "ec2-user"
+    #: AWS Secrets Manager secret holding the bastion's PEM private key.
+    SSH_SECRET_NAME: Optional[str] = None
+    SSH_SECRET_REGION: Optional[str] = None
 
     # --- AWS / S3 / Textract ---
     AWS_REGION: str = "us-east-1"
