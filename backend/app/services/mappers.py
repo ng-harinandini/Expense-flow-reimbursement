@@ -371,6 +371,11 @@ def policy_rule_to_dict(rule: PolicyRule) -> dict[str, Any]:
         "expirationDate": _iso_date(rule.expiration_date),
         "conditions": rule.conditions,
         "actions": rule.actions,
+        # AI extraction provenance — present only for rules that originated from Gemini.
+        "sourceDocumentId": str(rule.source_document_id) if rule.source_document_id else None,
+        "sourcePageNumber": rule.source_page_number,
+        "sourceChunkId": str(rule.source_chunk_id) if rule.source_chunk_id else None,
+        "extractedBy": rule.extracted_by,
     }
 
 

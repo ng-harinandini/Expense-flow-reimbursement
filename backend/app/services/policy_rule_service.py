@@ -18,6 +18,7 @@ from typing import Any, Optional, Sequence
 from app.core.logging import get_logger
 from app.domain.actor import Actor
 from app.domain.errors import NotFoundError, ValidationError
+from app.models.candidate_rule import CandidatePolicyRule
 from app.models.enums import AuditAction, AuditEntity
 from app.models.policy import PolicyRule
 from app.repositories.policy_rule_repository import PolicyRuleRepository
@@ -172,6 +173,64 @@ class PolicyRuleService:
             extra={"published": len(published), "retired": retired},
         )
         return published
+
+    def publish_single_rule(
+        self,
+        candidate: CandidatePolicyRule,
+        *,
+        actor: Actor,
+        effective_date: Optional[date] = None,
+    ) -> PolicyRule:
+        """Publish one AI-extracted candidate as the next version of its rule code.
+
+        Unlike ``replace_ruleset``, this does not retire any other rules — it only
+        publishes a single new version, carrying full provenance from the candidate.
+        """
+        as_of = effective_date or date.today()
+        code = (candidate.code or _code_for_category(candidate.category)).strip()
+
+        rule = self._rules.publish_version(
+            code=code,
+            name=candidate.name,
+            category=candidate.category,
+            effective_date=as_of,
+            created_by_sub=actor.sub,
+            description=candidate.description,
+            country=candidate.country or None,
+            currency=(candidate.currency or "USD").upper()[:3],
+            grade_tier=candidate.grade_tier or "All Staff",
+            expense_limit=candidate.expense_limit,
+            limit_expression=candidate.limit_expression,
+            auto_approve_limit=candidate.auto_approve_limit,
+            receipt_required_above=candidate.receipt_required_above,
+            requires_pre_approval=candidate.requires_pre_approval,
+            priority=candidate.priority,
+            conditions=candidate.conditions,
+            actions=candidate.actions,
+            special_rules=candidate.special_rules or [],
+            # provenance
+            source_document_id=candidate.document_id,
+            source_page_number=candidate.source_page_number,
+            source_chunk_id=candidate.source_chunk_id,
+            extracted_by=candidate.extracted_by,
+        )
+
+        self._audit.record(
+            actor=actor,
+            action=AuditAction.POLICY_UPDATE,
+            entity_type=AuditEntity.POLICY_RULE,
+            entity_id=rule.id,
+            details=(
+                f"Published AI-extracted rule '{rule.name}' ({rule.code} v{rule.version}) "
+                f"from document page {candidate.source_page_number}."
+            ),
+            after={"rules": [policy_rule_to_dict(rule)]},
+        )
+        logger.info(
+            "policy_rules.single_published",
+            extra={"code": rule.code, "version": rule.version, "category": rule.category},
+        )
+        return rule
 
     def _retire_absent(self, submitted_codes: set[str], *, on_date: date) -> int:
         """Deactivate active rules whose code was not part of the submitted ruleset."""
