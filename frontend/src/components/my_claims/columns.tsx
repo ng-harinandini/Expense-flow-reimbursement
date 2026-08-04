@@ -2,7 +2,7 @@ import type { ColDef, ICellRendererParams } from "ag-grid-community";
 
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { ClaimStatus, ExpenseClaim } from "@/types";
+import type { Claim, ClaimStatus } from "@/types";
 
 export const STATUS_LABELS: Record<ClaimStatus, string> = {
   Draft: "Draft",
@@ -38,23 +38,7 @@ export function StatusBadge({ status }: { status: ClaimStatus }) {
   );
 }
 
-function riskScoreClasses(score: number) {
-  if (score >= 70) return "text-destructive";
-  if (score >= 35) return "text-amber-500";
-  return "text-emerald-500";
-}
-
-export function RiskScoreCell({ params }: { params: ICellRendererParams<ExpenseClaim, number> }) {
-  const score = params.data?.fraudScreening?.riskScore;
-
-  if (score === undefined) {
-    return <span className="text-muted-foreground">—</span>;
-  }
-
-  return <span className={cn("font-semibold", riskScoreClasses(score))}>{score}</span>;
-}
-
-export function formatCurrency(amount: number, currency: string) {
+export function formatCurrency(amount: number, currency: string = "USD") {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: currency || "USD",
@@ -71,7 +55,11 @@ export function formatDate(dateStr: string) {
   });
 }
 
-export function buildColumnDefs(): ColDef<ExpenseClaim>[] {
+export function getClaimTotal(claim: Claim) {
+  return claim.items.reduce((sum, item) => sum + item.amount, 0);
+}
+
+export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[] {
   return [
     {
       headerName: "Claim Ref",
@@ -83,65 +71,52 @@ export function buildColumnDefs(): ColDef<ExpenseClaim>[] {
     {
       headerName: "Employee",
       field: "employeeName",
-      flex: 1.2,
-      minWidth: 150,
+      flex: 1.1,
+      minWidth: 140,
     },
     {
-      headerName: "Vendor / Category",
-      field: "merchantVendor",
-      flex: 1.6,
-      minWidth: 200,
-      cellRenderer: (params: ICellRendererParams<ExpenseClaim>) => (
-        <div className="flex flex-col py-1 leading-tight">
-          <span className="font-medium text-foreground">{params.data?.merchantVendor}</span>
-          <span className="text-xs text-muted-foreground">{params.data?.category}</span>
-        </div>
-      ),
-      autoHeight: true,
+      headerName: "Claim Title",
+      field: "claimTitle",
+      flex: 1.4,
+      minWidth: 180,
+      cellClass: "font-medium",
     },
     {
-      headerName: "Amount",
-      field: "amount",
-      flex: 1,
-      minWidth: 110,
-      valueFormatter: (params) =>
-        params.data ? formatCurrency(params.data.amount, params.data.currency) : "",
+      headerName: "From - To Date",
+      colId: "dateRange",
+      flex: 1.3,
+      minWidth: 190,
+      valueGetter: (params) =>
+        params.data ? `${formatDate(params.data.fromDate)} – ${formatDate(params.data.toDate)}` : "",
     },
     {
-      headerName: "Date",
-      field: "expenseDate",
+      headerName: "Total Amount",
+      colId: "totalAmount",
       flex: 1,
       minWidth: 120,
-      valueFormatter: (params) => (params.value ? formatDate(params.value as string) : ""),
-    },
-    {
-      headerName: "Risk Score",
-      field: "fraudScreening.riskScore",
-      flex: 1,
-      minWidth: 110,
-      cellRenderer: (params: ICellRendererParams<ExpenseClaim, number>) => (
-        <RiskScoreCell params={params} />
-      ),
+      valueGetter: (params) => (params.data ? getClaimTotal(params.data) : 0),
+      valueFormatter: (params) => formatCurrency(params.value as number),
     },
     {
       headerName: "Status",
       field: "status",
-      flex: 1.2,
+      flex: 1.1,
       minWidth: 150,
-      cellRenderer: (params: ICellRendererParams<ExpenseClaim>) =>
+      cellRenderer: (params: ICellRendererParams<Claim>) =>
         params.data ? <StatusBadge status={params.data.status} /> : null,
     },
     {
       headerName: "Action",
-      field: "id",
-      flex: 0.8,
+      colId: "action",
+      flex: 0.7,
       minWidth: 100,
       sortable: false,
       filter: false,
-      cellRenderer: () => (
+      cellRenderer: (params: ICellRendererParams<Claim>) => (
         <button
           type="button"
           className="text-sm font-medium text-secondary hover:underline"
+          onClick={() => params.data && onView(params.data)}
         >
           View
         </button>

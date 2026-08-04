@@ -10,7 +10,27 @@ backend/.pytest_cache/
 # Environment files
 frontend/.env.local
 backend/.env
+# Any .env backup (e.g. .env.bak-pre-pgvector) — these hold real credentials
+backend/.env.*
+!backend/.env.example
+
+# Coverage artifacts
+backend/.coverage
+backend/htmlcov/
 
 # OS
 .DS_Store
 Thumbs.db
+# Recursive Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Workflow / project-management docs — kept local, intentionally NOT tracked or pushed
+/CLAUDE.md
+/HANDOFF.md
+/LOG.md
+/TASKS/
+/PLANS/
+/DECISIONS/
+/.claude/

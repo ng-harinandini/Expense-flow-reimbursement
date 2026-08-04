@@ -76,15 +76,33 @@ export const ArchitectureOverview: React.FC = () => {
     }
   ];
 
+  // Authorization is enforced server-side (FastAPI) from the Cognito ID token's
+  // custom:role_id attribute. Cognito Groups are not used for RBAC.
   const apiRoutes = [
-    { method: 'GET', path: '/api/claims', role: 'All Roles', desc: 'Fetch expense claims with filters (status, employee, risk)' },
-    { method: 'POST', path: '/api/claims', role: 'Employee', desc: 'Submit new claim with receipt payload & auto policy check' },
-    { method: 'POST', path: '/api/claims/:id/action', role: 'Manager / Finance', desc: 'Execute APPROVE, REJECT, DISBURSE, or FLAG_FRAUD' },
-    { method: 'POST', path: '/api/ocr-receipt', role: 'Employee', desc: 'Server-side Gemini 2.5 Flash OCR receipt parsing' },
-    { method: 'GET', path: '/api/policy-rules', role: 'All Roles', desc: 'Fetch active company reimbursement policy constraints' },
-    { method: 'PUT', path: '/api/policy-rules', role: 'Finance Admin', desc: 'Update policy thresholds and auto-approve limits' },
-    { method: 'GET', path: '/api/audit-logs', role: 'Finance / Admin', desc: 'Query immutable system audit log entries' },
-    { method: 'POST', path: '/api/refine-iam-policy', role: 'Admin', desc: 'Analyze and refine IAM wildcards with Gemini' }
+    { method: 'POST', path: '/api/auth/login', role: 'Public', desc: 'Exchange email + password for Cognito tokens (USER_PASSWORD_AUTH)' },
+    { method: 'POST', path: '/api/auth/respond-challenge', role: 'Public', desc: 'Complete first-login NEW_PASSWORD_REQUIRED → tokens' },
+    { method: 'GET', path: '/api/auth/me', role: 'Authenticated', desc: 'Current caller identity (role from custom:role_id)' },
+    { method: 'GET', path: '/api/claims', role: 'All Roles (employee: own only)', desc: 'Fetch expense claims with filters (status, employee, risk)' },
+    { method: 'POST', path: '/api/claims', role: 'Employee', desc: 'Submit claim; employeeId is bound to the token identity' },
+    { method: 'GET', path: '/api/claims/:id', role: 'All Roles (employee: own only)', desc: 'Fetch one claim by id or claim number' },
+    { method: 'PATCH', path: '/api/claims/:id', role: 'Owner (Draft only)', desc: 'Edit an unsubmitted claim; 409 once submitted' },
+    { method: 'POST', path: '/api/claims/:id/action', role: 'Manager / Finance / Admin (DISBURSE: Finance/Admin)', desc: 'Execute APPROVE, REJECT, DISBURSE, or FLAG_FRAUD (409 if illegal from the current state)' },
+    { method: 'GET', path: '/api/claims/:id/history', role: 'All Roles (employee: own only)', desc: 'Durable claim lifecycle history with actor + request ids' },
+    { method: 'POST', path: '/api/claims/:id/assign', role: 'Manager / Finance / Admin', desc: 'Assign or clear the reviewer for the next decision' },
+    { method: 'POST', path: '/api/claims/:id/comments', role: 'All Roles (employee: own only)', desc: 'Add a comment; internal notes are reviewer-only' },
+    { method: 'POST', path: '/api/receipts/upload', role: 'Employee', desc: 'Upload receipt → S3 → Amazon Textract extraction' },
+    { method: 'GET', path: '/api/receipts', role: 'All Roles (employee: own only)', desc: 'List receipts; employees are scoped to their own' },
+    { method: 'POST', path: '/api/ai/ocr-extract', role: 'Authenticated', desc: 'Server-side Gemini 2.5 Flash OCR receipt parsing' },
+    { method: 'GET', path: '/api/policy-rules', role: 'Authenticated', desc: 'Fetch the active, effective-dated policy ruleset' },
+    { method: 'PUT', path: '/api/policy-rules', role: 'Finance / Admin', desc: 'Publish a new policy ruleset version (previous versions retained)' },
+    { method: 'GET', path: '/api/policy-rules/:code/versions', role: 'Finance / Admin / Auditor', desc: 'Version history of one policy rule' },
+    { method: 'GET', path: '/api/audit-logs', role: 'Finance / Admin / Auditor', desc: 'Query the immutable, append-only audit trail' },
+    { method: 'GET', path: '/api/audit-logs/:entityType/:entityId', role: 'Finance / Admin / Auditor', desc: 'Complete audit trail for one entity (e.g. Claim/EXP-2026-1001)' },
+    { method: 'POST', path: '/api/ai/refine-iam-policy', role: 'Admin', desc: 'Analyze and refine IAM wildcards with Gemini' },
+    { method: 'GET', path: '/api/aws/export-code', role: 'Admin', desc: 'Export AWS Lambda / Step Functions / IAM policy spec' },
+    { method: 'POST', path: '/api/admin/users', role: 'Admin', desc: 'Create/invite user via Cognito (sets custom:role_id)' },
+    { method: 'GET', path: '/api/admin/users', role: 'Admin', desc: 'List Cognito users (paginated)' },
+    { method: 'POST', path: '/api/admin/users/:email/role', role: 'Admin', desc: 'Change a user role (updates custom:role_id)' }
   ];
 
   return (

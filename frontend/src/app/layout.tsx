@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { QueryProvider } from "../providers/QueryProvider";
+import { ToastProvider } from "@/components/ui/toast";
+import { UserProvider } from "@/context/UserContext";
 
 export const metadata: Metadata = {
   title: "ExpenseFlow AI - Next.js Enterprise Expense Platform",
@@ -15,8 +17,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-[#020617] text-slate-100 antialiased selection:bg-orange-500/30 selection:text-orange-200">
-        <QueryProvider>{children}</QueryProvider>
+      <body className="bg-background text-foreground antialiased">
+        <QueryProvider>
+          <ToastProvider>
+            <UserProvider>{children}</UserProvider>
+          </ToastProvider>
+        </QueryProvider>
       </body>
     </html>
   );

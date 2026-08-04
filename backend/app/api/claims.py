@@ -1,200 +1,239 @@
-import time
-import random
-from datetime import datetime
-from typing import Optional, List
-from fastapi import APIRouter, HTTPException, Query, status
-from app.services.store import claims_store, INITIAL_EMPLOYEES, add_audit_log
-from app.services.policy_engine import evaluate_expense_policy
-from app.services.fraud_engine import screen_for_anomalies
-from app.schemas.schemas import ExpenseClaimCreateSchema, ActionRequestSchema
+"""Claims API — thin HTTP adapter over :class:`~app.services.claim_service.ClaimService`.
+
+The route layer does four things and nothing else: authorize the caller, validate the request
+shape, call one service method, commit, and serialize. No SQL, no business rules, no status
+assignment — those live in the service, repository, and state machine respectively.
+
+Error mapping is handled centrally (``app.core.errors``), so no route catches domain errors:
+
+    unknown claim / employee        -> 404
+    not the caller's claim          -> 404 (employees) / 403 (explicit ownership failure)
+    illegal lifecycle transition    -> 409  (with the legal next states in the body)
+    duplicate submission            -> 409
+    receipt already claimed         -> 409
+    concurrent modification         -> 409
+    business-rule violation         -> 422
+
+Response bodies keep the exact ``ExpenseClaim`` field names the frontend already consumes
+(``app.services.mappers``); the new keys are additive.
+"""
+
+from __future__ import annotations
+
+from typing import Any, List, Optional
+
+from fastapi import APIRouter, Depends, Query, status
+
+from app.core.deps import (
+    CurrentUser,
+    get_actor,
+    get_claim_service,
+    get_unit_of_work,
+    require_roles,
+)
+from app.core.unit_of_work import UnitOfWork
+from app.domain.actor import Actor
+from app.schemas.schemas import (
+    ActionRequestSchema,
+    AssignReviewerSchema,
+    ClaimStatusHistorySchema,
+    CommentCreateSchema,
+    ExpenseClaimCreateSchema,
+    ExpenseClaimUpdateSchema,
+    ItemDecisionRequestSchema,
+)
+from app.services.claim_service import ClaimService
+from app.services.mappers import claim_to_dict
 
 router = APIRouter(prefix="/claims", tags=["Claims"])
+
+# Reviewer-only notes are hidden when the claim owner is the audience.
+_INTERNAL_VISIBLE_ROLES = frozenset({"manager", "finance", "admin", "auditor"})
+
+
+def _serialize(claim, actor: Actor) -> dict[str, Any]:
+    return claim_to_dict(
+        claim, include_internal_comments=actor.role in _INTERNAL_VISIBLE_ROLES
+    )
+
 
 @router.get("", response_model=List[dict])
 def get_claims(
     category: Optional[str] = None,
     status: Optional[str] = None,
     employeeId: Optional[str] = None,
-    riskLevel: Optional[str] = None
+    riskLevel: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    actor: Actor = Depends(get_actor),
+    service: ClaimService = Depends(get_claim_service),
 ):
-    filtered = list(claims_store)
-    if category:
-        filtered = [c for c in filtered if c.get("category") == category]
-    if status:
-        filtered = [c for c in filtered if c.get("status") == status]
-    if employeeId:
-        filtered = [c for c in filtered if c.get("employeeId") == employeeId]
-    if riskLevel:
-        filtered = [c for c in filtered if c.get("fraudScreening", {}).get("riskLevel") == riskLevel]
-    return filtered
-
-@router.post("", status_code=status.HTTP_201_CREATED)
-def create_claim(payload: ExpenseClaimCreateSchema):
-    claim_data = payload.model_dump()
-
-    new_id = f"claim-{int(time.time()*1000)}"
-    claim_number = f"EXP-{datetime.now().year}-{random.randint(1000, 9999)}"
-
-    employee = next((e for e in INITIAL_EMPLOYEES if e["id"] == claim_data.get("employeeId")), INITIAL_EMPLOYEES[0])
-
-    # 1. Policy Engine Evaluation
-    policy_report = evaluate_expense_policy({
-        **claim_data,
-        "employeeGrade": employee["grade"]
-    })
-
-    # 2. Fraud Screening
-    fraud_report = screen_for_anomalies({
-        **claim_data,
-        "id": new_id,
-        "employeeId": employee["id"]
-    }, claims_store)
-
-    # Determine Status
-    if fraud_report["isFlagged"] and fraud_report["riskScore"] >= 40:
-        final_status = "Flagged_Fraud"
-    elif not policy_report["overallPassed"]:
-        final_status = "Manager_Review"
-    elif policy_report["requiresManualReview"]:
-        final_status = "Manager_Review"
-    else:
-        final_status = "Auto_Approved"
-
-    now_iso = datetime.utcnow().isoformat() + "Z"
-
-    amount = claim_data.get("amount") or 0.0
-    amount_usd = claim_data.get("amountUSD") or amount
-
-    new_claim = {
-        "id": new_id,
-        "claimNumber": claim_number,
-        "employeeId": employee["id"],
-        "employeeName": employee["name"],
-        "employeeGrade": employee["grade"],
-        "department": employee["department"],
-        "expenseDate": claim_data.get("expenseDate") or datetime.now().strftime("%Y-%m-%d"),
-        "submissionDate": datetime.now().strftime("%Y-%m-%d"),
-        "category": claim_data.get("category") or "Misc / Other",
-        "subCategory": claim_data.get("subCategory") or "General Expense",
-        "amount": amount,
-        "currency": claim_data.get("currency") or "USD",
-        "amountUSD": amount_usd,
-        "merchantVendor": claim_data.get("merchantVendor") or "Vendor",
-        "purposeDescription": claim_data.get("purposeDescription") or "",
-        "attendees": claim_data.get("attendees"),
-        "tripLog": claim_data.get("tripLog"),
-        "hasPreApproval": claim_data.get("hasPreApproval", False),
-        "preApprovalDocRef": claim_data.get("preApprovalDocRef"),
-        "receiptAttached": claim_data.get("receiptAttached", True),
-        "receiptUrl": claim_data.get("receiptUrl"),
-        "extractedReceipt": claim_data.get("extractedReceipt"),
-        "policyValidation": policy_report,
-        "fraudScreening": fraud_report,
-        "status": final_status,
-        "workflowHistory": [
-            {
-                "timestamp": now_iso,
-                "actorName": employee["name"],
-                "actorRole": "employee",
-                "stepName": "Submit Claim",
-                "action": "Submitted expense claim with receipt",
-                "status": "SUCCESS",
-                "traceId": f"trace-sf-{int(time.time()*1000)}-1"
-            },
-            {
-                "timestamp": now_iso,
-                "actorName": "FastAPI: Policy Engine",
-                "actorRole": "admin",
-                "stepName": "Policy Validation",
-                "action": "Passed policy constraints" if policy_report["overallPassed"] else "Flagged policy violations",
-                "status": "SUCCESS" if policy_report["overallPassed"] else "WARNING",
-                "notes": policy_report["reasoningSummary"],
-                "traceId": f"trace-sf-{int(time.time()*1000)}-2"
-            },
-            {
-                "timestamp": now_iso,
-                "actorName": "FastAPI: Anomaly Engine",
-                "actorRole": "admin",
-                "stepName": "Fraud Screening",
-                "action": f"Risk Score: {fraud_report['riskScore']}/100 ({fraud_report['riskLevel']})",
-                "status": "FAILED" if fraud_report["isFlagged"] else "SUCCESS",
-                "notes": fraud_report["rationale"],
-                "traceId": f"trace-sf-{int(time.time()*1000)}-3"
-            }
-        ],
-        "comments": [
-            {
-                "id": f"c-{int(time.time()*1000)}",
-                "authorName": "FastAPI Workflow Engine",
-                "authorRole": "admin",
-                "timestamp": now_iso,
-                "text": f"Claim processed. Route status set to: {final_status.replace('_', ' ')}."
-            }
-        ]
-    }
-
-    claims_store.insert(0, new_claim)
-
-    add_audit_log(
-        employee["name"],
-        "employee",
-        "SUBMIT_CLAIM",
-        claim_number,
-        f"Submitted claim for ${amount_usd:.2f} ({new_claim['category']}) -> Route: {final_status}"
+    """List claims. Employees are scoped to their own regardless of the filters they send."""
+    claims = service.list_claims(
+        actor=actor,
+        category=category,
+        status=status,
+        employee_code=employeeId,
+        risk_level=riskLevel,
+        limit=limit,
+        offset=offset,
     )
+    return [_serialize(claim, actor) for claim in claims]
 
-    return new_claim
 
-@router.post("/{claim_id}/action")
-def execute_claim_action(claim_id: str, payload: ActionRequestSchema):
-    claim = next((c for c in claims_store if c.get("id") == claim_id or c.get("claimNumber") == claim_id), None)
-    if not claim:
-        raise HTTPException(status_code=404, detail="Claim not found")
+@router.get("/{claim_id}", response_model=dict)
+def get_claim(
+    claim_id: str,
+    actor: Actor = Depends(get_actor),
+    service: ClaimService = Depends(get_claim_service),
+):
+    """One claim by id or claim number."""
+    claim = service.get_claim_for_actor(claim_id, actor=actor)
+    return _serialize(claim, actor)
 
-    action = payload.action
-    actor_name = payload.actorName or "Manager"
-    actor_role = payload.actorRole or "manager"
-    notes = payload.notes or ""
 
-    if action == "APPROVE":
-        if claim.get("status") == "Manager_Review":
-            claim["status"] = "Finance_Review"
-        else:
-            claim["status"] = "Approved"
-    elif action == "REJECT":
-        claim["status"] = "Rejected"
-    elif action == "DISBURSE":
-        claim["status"] = "Disbursed"
-    elif action == "FLAG_FRAUD":
-        claim["status"] = "Flagged_Fraud"
+@router.get("/{claim_id}/history", response_model=List[ClaimStatusHistorySchema])
+def get_claim_history(
+    claim_id: str,
+    actor: Actor = Depends(get_actor),
+    service: ClaimService = Depends(get_claim_service),
+):
+    """The claim's durable lifecycle history, oldest first."""
+    claim = service.get_claim_for_actor(claim_id, actor=actor)
+    return [
+        ClaimStatusHistorySchema(
+            sequence=entry.sequence,
+            fromStatus=entry.from_status.value if entry.from_status else None,
+            toStatus=entry.to_status.value,
+            stepName=entry.step_name,
+            action=entry.action,
+            outcome=entry.outcome,
+            notes=entry.notes,
+            actorName=entry.actor_name,
+            actorRole=entry.actor_role,
+            occurredAt=entry.occurred_at.isoformat() if entry.occurred_at else None,
+            requestId=entry.request_id,
+            correlationId=entry.correlation_id,
+        )
+        for entry in service.list_history(claim)
+    ]
 
-    now_iso = datetime.utcnow().isoformat() + "Z"
 
-    claim.setdefault("workflowHistory", []).append({
-        "timestamp": now_iso,
-        "actorName": actor_name,
-        "actorRole": actor_role,
-        "stepName": f"Action: {action}",
-        "action": f"Executed {action} on claim {claim.get('claimNumber')}",
-        "status": "WARNING" if action in ["REJECT", "FLAG_FRAUD"] else "SUCCESS",
-        "notes": notes
-    })
+@router.post("", status_code=status.HTTP_201_CREATED, response_model=dict)
+def create_claim(
+    payload: ExpenseClaimCreateSchema,
+    current: CurrentUser = Depends(require_roles("employee")),
+    service: ClaimService = Depends(get_claim_service),
+    uow: UnitOfWork = Depends(get_unit_of_work),
+):
+    """Create and submit a claim.
 
-    if notes:
-        claim.setdefault("comments", []).append({
-            "id": f"c-{int(time.time()*1000)}",
-            "authorName": actor_name,
-            "authorRole": actor_role,
-            "timestamp": now_iso,
-            "text": notes
-        })
+    Runs the full pipeline (Draft → Submitted → Processing → routed) in one transaction. The owner
+    is the authenticated employee; any ``employeeId`` in the body is ignored.
+    """
+    actor = Actor.from_current_user(current)
+    claim = service.submit_claim(payload.model_dump(exclude_none=False), actor=actor)
+    uow.commit()
+    return _serialize(claim, actor)
 
-    add_audit_log(
-        actor_name,
-        actor_role,
-        "APPROVAL_ACTION",
-        claim.get("claimNumber", claim_id),
-        f"Action {action} executed. Status updated to {claim['status']}"
+
+@router.patch("/{claim_id}", response_model=dict)
+def update_claim(
+    claim_id: str,
+    payload: ExpenseClaimUpdateSchema,
+    actor: Actor = Depends(get_actor),
+    service: ClaimService = Depends(get_claim_service),
+    uow: UnitOfWork = Depends(get_unit_of_work),
+):
+    """Edit a claim that is still a draft. Returns 409 once it has been submitted."""
+    claim = service.update_draft(
+        claim_id, changes=payload.model_dump(exclude_unset=True), actor=actor
     )
+    uow.commit()
+    return _serialize(claim, actor)
 
-    return claim
+
+@router.post("/{claim_id}/action", response_model=dict)
+def execute_claim_action(
+    claim_id: str,
+    payload: ActionRequestSchema,
+    current: CurrentUser = Depends(require_roles("manager", "finance", "admin")),
+    service: ClaimService = Depends(get_claim_service),
+    uow: UnitOfWork = Depends(get_unit_of_work),
+):
+    """Execute ``APPROVE``, ``REJECT``, ``DISBURSE`` or ``FLAG_FRAUD``.
+
+    The actor is the authenticated caller — ``actorName``/``actorRole`` in the body are ignored.
+    Only finance/admin may ``DISBURSE``. An action that is illegal from the claim's current state
+    returns 409 listing the states that are reachable.
+    """
+    actor = Actor.from_current_user(current)
+    claim = service.execute_action(
+        claim_id,
+        action=payload.action,
+        actor=actor,
+        notes=payload.notes,
+        expected_version=payload.expectedVersion,
+    )
+    uow.commit()
+    return _serialize(claim, actor)
+
+
+@router.post("/{claim_id}/items/{item_id}/decision", response_model=dict)
+def decide_expense_item(
+    claim_id: str,
+    item_id: str,
+    payload: ItemDecisionRequestSchema,
+    current: CurrentUser = Depends(require_roles("manager", "finance", "admin")),
+    service: ClaimService = Depends(get_claim_service),
+    uow: UnitOfWork = Depends(get_unit_of_work),
+):
+    """Approve or reject one expense item of a claim.
+
+    The claim itself moves only once every item has been decided: approved if any item survived,
+    rejected if all were rejected. A rejection requires a reason.
+    """
+    actor = Actor.from_current_user(current)
+    claim = service.decide_item(
+        claim_id,
+        item_id,
+        action=payload.action,
+        actor=actor,
+        notes=payload.notes,
+        expected_version=payload.expectedVersion,
+    )
+    uow.commit()
+    return _serialize(claim, actor)
+
+
+@router.post("/{claim_id}/assign", response_model=dict)
+def assign_reviewer(
+    claim_id: str,
+    payload: AssignReviewerSchema,
+    current: CurrentUser = Depends(require_roles("manager", "finance", "admin")),
+    service: ClaimService = Depends(get_claim_service),
+    uow: UnitOfWork = Depends(get_unit_of_work),
+):
+    """Assign the reviewer responsible for the next decision (``null`` clears it)."""
+    actor = Actor.from_current_user(current)
+    claim = service.assign_reviewer(
+        claim_id, reviewer_code=payload.reviewerId, actor=actor, notes=payload.notes
+    )
+    uow.commit()
+    return _serialize(claim, actor)
+
+
+@router.post("/{claim_id}/comments", status_code=status.HTTP_201_CREATED, response_model=dict)
+def add_comment(
+    claim_id: str,
+    payload: CommentCreateSchema,
+    actor: Actor = Depends(get_actor),
+    service: ClaimService = Depends(get_claim_service),
+    uow: UnitOfWork = Depends(get_unit_of_work),
+):
+    """Comment on a claim. Employees may only comment on their own; internal notes are staff-only."""
+    claim = service.add_comment(
+        claim_id, body=payload.text, actor=actor, is_internal=payload.isInternal
+    )
+    uow.commit()
+    return _serialize(claim, actor)
