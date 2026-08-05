@@ -57,6 +57,14 @@ export type ClaimStatus =
   | 'Flagged_Fraud'
   | 'Withdrawn';
 
+export type ExpenseItemStatus =
+  | 'Submitted'
+  | 'Auto_Approved'
+  | 'Policy_Hold'
+  | 'Fraud_Flag'
+  | 'Manager_Approved'
+  | 'Rejected';
+
 export interface ReceiptData {
   fileName?: string;
   vendorName: string;
@@ -189,6 +197,7 @@ export interface ClaimExpenseItem {
   amount: number;
   currency: string;
   receiptUrl: string;
+  status: ExpenseItemStatus;
 }
 
 /** A claim raised for a trip/purchase, grouping one or more expense items. */

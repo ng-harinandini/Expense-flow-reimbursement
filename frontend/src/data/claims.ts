@@ -31,6 +31,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 9800,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'Policy_Hold',
       },
       {
         id: 'item-2001-2',
@@ -41,6 +42,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 7200,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[1],
+        status: 'Policy_Hold',
       },
       {
         id: 'item-2001-3',
@@ -51,6 +53,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 640,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'Auto_Approved',
       },
       {
         id: 'item-2001-4',
@@ -61,6 +64,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 410,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[1],
+        status: 'Auto_Approved',
       },
     ],
     workflowHistory: [
@@ -102,6 +106,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 38.5,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'Auto_Approved',
       },
     ],
     workflowHistory: [
@@ -143,6 +148,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 90,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[1],
+        status: 'Auto_Approved',
       },
       {
         id: 'item-2003-2',
@@ -153,6 +159,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 512,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'Fraud_Flag',
       },
     ],
     workflowHistory: [
@@ -194,6 +201,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 6400,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'Manager_Approved',
       },
       {
         id: 'item-2004-2',
@@ -204,6 +212,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 5100,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[1],
+        status: 'Manager_Approved',
       },
       {
         id: 'item-2004-3',
@@ -214,6 +223,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 1800,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'Manager_Approved',
       },
     ],
     workflowHistory: [
@@ -263,6 +273,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 54,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[1],
+        status: 'Submitted',
       },
     ],
     workflowHistory: [
@@ -296,6 +307,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 5200,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[0],
+        status: 'Policy_Hold',
       },
       {
         id: 'item-2006-2',
@@ -306,6 +318,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
         amount: 3400,
         currency: 'USD',
         receiptUrl: RECEIPT_PHOTOS[1],
+        status: 'Manager_Approved',
       },
     ],
     workflowHistory: [

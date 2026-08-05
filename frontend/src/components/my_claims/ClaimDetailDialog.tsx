@@ -25,11 +25,11 @@ import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
 import type { Claim } from "@/types";
 
 import {
+  ItemStatusBadge,
   StatusBadge,
   formatCurrency,
   formatDate,
   formatDateTime,
-  getClaimTotal,
 } from "./columns";
 import { ClaimStatusStepper } from "./ClaimStatusStepper";
 
@@ -164,7 +164,6 @@ export function ClaimDetailDialog({
   )?.managerName;
   const canWithdraw = WITHDRAWABLE_STATUSES.has(claim.status);
   const isWithdrawn = claim.status === "Withdrawn";
-  const totalAmount = getClaimTotal(claim);
   const selectedItem =
     claim.items.find((item) => item.id === selectedItemId) ?? claim.items[0];
 
@@ -180,12 +179,10 @@ export function ClaimDetailDialog({
           </div>
           <p className="text-sm text-muted-foreground">
             {claim.claimTitle} · {claim.claimNumber} ·{" "}
-            {formatCurrency(totalAmount)}
+            {formatCurrency(claim.totalAmount)}
           </p>
         </DialogHeader>
 
-        {/* Two narrow columns (stepper, item details) + one wide one for the receipt. The
-            receipt column is the only `1fr` track, so it absorbs all the extra width. */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[auto_22rem_1fr]">
           {/* Column 1 — progress stepper */}
           <ClaimStatusStepper
@@ -194,7 +191,6 @@ export function ClaimDetailDialog({
             className="lg:border-r lg:pr-6"
           />
 
-          {/* Column 2 — item picker, then that item's extracted details, stacked vertically */}
           <div className="flex flex-col gap-4 lg:border-r lg:pr-6">
             {/* Current-status card hidden for now — the status badge in the header covers it.
                 `getCurrentStepCopy` is kept because restoring this block is the intended path. */}
@@ -235,9 +231,17 @@ export function ClaimDetailDialog({
                     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                       Category
                     </p>
-                    <p className="text-sm font-medium text-foreground">
-                      {selectedItem.category}
-                    </p>
+                    {/* The item's own status, not the claim's — one item can be on a policy hold
+                        while a sibling is what pushed the whole claim into fraud review. */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-medium text-foreground">
+                        {selectedItem.category}
+                      </p>
+                      <ItemStatusBadge
+                        status={selectedItem.status}
+                        className="text-[10px]"
+                      />
+                    </div>
                   </div>
                   <div>
                     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">

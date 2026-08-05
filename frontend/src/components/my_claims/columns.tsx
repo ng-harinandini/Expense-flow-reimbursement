@@ -2,14 +2,39 @@ import type { ColDef, ICellRendererParams } from "ag-grid-community";
 
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { Claim, ClaimStatus } from "@/types";
+import type { Claim, ClaimStatus, ExpenseItemStatus } from "@/types";
 
-import { STATUS_BADGE_CLASSES, STATUS_LABELS } from "./status";
+import {
+  ITEM_STATUS_BADGE_CLASSES,
+  ITEM_STATUS_LABELS,
+  STATUS_BADGE_CLASSES,
+  STATUS_LABELS,
+} from "./status";
 
 export function StatusBadge({ status }: { status: ClaimStatus }) {
   return (
     <Badge className={cn("font-medium", STATUS_BADGE_CLASSES[status])}>
       {STATUS_LABELS[status]}
+    </Badge>
+  );
+}
+
+export function ItemStatusBadge({
+  status,
+  className,
+}: {
+  status: ExpenseItemStatus;
+  className?: string;
+}) {
+  return (
+    <Badge
+      className={cn(
+        "font-medium",
+        ITEM_STATUS_BADGE_CLASSES[status],
+        className,
+      )}
+    >
+      {ITEM_STATUS_LABELS[status]}
     </Badge>
   );
 }

@@ -6,6 +6,7 @@ import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Claim, ClaimExpenseItem, ClaimStatus, ExpenseCategory } from "@/types";
 
+import { ItemStatusBadge } from "./columns";
 import { STATUS_LABELS } from "./status";
 
 /** Dot colour per category, so a chip is scannable before its text is read. */
@@ -30,8 +31,9 @@ export function ExpenseItemChip({ item }: { item: ClaimExpenseItem }) {
       <span className={cn("size-1.5 shrink-0 rounded-full", dotClassFor(item.category))} />
       <span className="font-medium text-foreground">{item.merchantVendor}</span>
       <span className="text-muted-foreground">
-        {item.amount.toFixed(2)} 
+        {item.amount.toFixed(2)}
       </span>
+      <ItemStatusBadge status={item.status} className="text-[10px]" />
     </span>
   );
 }

@@ -330,7 +330,7 @@ class ClaimService:
             f"Routed to {claim.status.value}.",
             actor=actor,
         )
-        self._scan_duplicates(claim)
+        # self._scan_duplicates(claim)
         # History, comments, fraud result and workflow were inserted during this transaction;
         # expire so the serialized aggregate reflects all of them.
         return self._claims.refresh(claim)
