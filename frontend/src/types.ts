@@ -54,7 +54,8 @@ export type ClaimStatus =
   | 'Approved'
   | 'Rejected'
   | 'Disbursed'
-  | 'Flagged_Fraud';
+  | 'Flagged_Fraud'
+  | 'Withdrawn';
 
 export interface ReceiptData {
   fileName?: string;

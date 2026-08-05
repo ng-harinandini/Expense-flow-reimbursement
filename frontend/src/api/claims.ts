@@ -1,3 +1,4 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "./client";
 import type { ReceiptExtraction } from "./expenseItems";
 import type { ClaimFormValues } from "@/components/submit_expense/claimSchema";
@@ -90,6 +91,8 @@ export interface GetClaimsParams {
   offset?: number;
 }
 
+export const CLAIMS_QUERY_KEY = ["claims"] as const;
+
 /** Raw shape the backend serialises — `title` maps to the frontend's `claimTitle`. */
 interface ClaimApiShape {
   id: string;
@@ -140,6 +143,35 @@ function mapClaim(raw: ClaimApiShape): Claim {
   };
 }
 
+// ---------------------------------------------------------------------------
+// POST /claims/{id}/withdraw
+// ---------------------------------------------------------------------------
+
+export interface WithdrawClaimOptions {
+  reason: string;
+  expectedVersion?: number;
+}
+
+/**
+ * Withdraw an entire claim. Employees may only withdraw their own, and only before it is
+ * approved — the backend answers 409 once it is Approved/Disbursed and 403 while it is under
+ * fraud investigation. Resolves to the updated claim.
+ */
+export function withdrawClaim(
+  claimId: string,
+  options: WithdrawClaimOptions = { reason: "Withdrawn by employee" },
+): Promise<Claim> {
+  const body: Record<string, unknown> = {};
+  if (options.reason) body.reason = options.reason;
+  if (options.expectedVersion != null) body.expectedVersion = options.expectedVersion;
+
+  return apiRequest<ClaimApiShape>(`/claims/${encodeURIComponent(claimId)}/withdraw`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+  }).then(mapClaim);
+}
+
 export function getClaims(params: GetClaimsParams = {}): Promise<Claim[]> {
   const query = new URLSearchParams();
   if (params.status) query.set("status", params.status);
@@ -151,4 +183,30 @@ export function getClaims(params: GetClaimsParams = {}): Promise<Claim[]> {
   const path = query.toString() ? `/claims?${query}` : "/claims";
 
   return apiRequest<ClaimApiShape[]>(path).then((list) => list.map(mapClaim));
+}
+
+export function useClaimsQuery(params: GetClaimsParams = {}) {
+  return useQuery({
+    queryKey: [...CLAIMS_QUERY_KEY, params],
+    queryFn: () => getClaims(params),
+  });
+}
+
+export function useWithdrawClaimMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      claimId,
+      reason,
+      expectedVersion,
+    }: {
+      claimId: string;
+      reason: string;
+      expectedVersion?: number;
+    }) => withdrawClaim(claimId, { reason, expectedVersion }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: CLAIMS_QUERY_KEY });
+    },
+  });
 }

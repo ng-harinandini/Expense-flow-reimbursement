@@ -152,6 +152,9 @@ class Claim(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base):
     reimbursed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    withdrawn_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # --- review assignment + decision ---
     assigned_reviewer_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -163,6 +166,7 @@ class Claim(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base):
     decided_by_sub: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     decision_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    withdrawal_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     reimbursement_reference: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
 
     # --- provenance ---

@@ -1,6 +1,6 @@
 "use client";
 
-import * as React from "react";
+import React, { useEffect } from "react";
 import { Undo2 } from "lucide-react";
 
 import {
@@ -16,14 +16,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/Button";
+import { useWithdrawClaimMutation } from "@/api/claims";
+import { getErrorMessage } from "@/lib/apiError";
 import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
 import type { Claim } from "@/types";
 
 import { formatCurrency, formatDate, getClaimTotal } from "./columns";
-import { ClaimStatusStepper, getCurrentStepIndex } from "./ClaimStatusStepper";
+import { ClaimStatusStepper } from "./ClaimStatusStepper";
 
-function getCurrentStepCopy(status: Claim["status"], manager?: string): { title: string; body: string } {
+function getCurrentStepCopy(
+  status: Claim["status"],
+  manager?: string,
+): { title: string; body: string } {
   switch (status) {
     case "Submitted":
       return {
@@ -68,6 +74,11 @@ function getCurrentStepCopy(status: Claim["status"], manager?: string): { title:
         title: "Disbursed",
         body: "Payment has been issued for this claim. It should reflect in your account shortly.",
       };
+    case "Withdrawn":
+      return {
+        title: "Currently: Withdrawn",
+        body: "You withdrew this claim, so it's closed and no longer under review. Submit a new claim if you need to file these expenses again.",
+      };
     default:
       return {
         title: "Currently: Draft",
@@ -76,14 +87,31 @@ function getCurrentStepCopy(status: Claim["status"], manager?: string): { title:
   }
 }
 
+// Mirrors the backend's WITHDRAWABLE_STATUSES (app/domain/claim_state_machine.py). Anything else —
+// approved, disbursed, already closed, or under fraud investigation — is refused server-side, so
+// the button is disabled rather than letting the user discover it through an error.
+const WITHDRAWABLE_STATUSES = new Set<Claim["status"]>([
+  "Submitted",
+  "Processing_AI",
+  "Manager_Review",
+  "Finance_Review",
+  "Auto_Approved",
+]);
+
 interface ClaimDetailDialogProps {
   claim: Claim | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-export function ClaimDetailDialog({ claim, open, onOpenChange }: ClaimDetailDialogProps) {
+export function ClaimDetailDialog({
+  claim,
+  open,
+  onOpenChange,
+}: ClaimDetailDialogProps) {
   const [selectedItemId, setSelectedItemId] = React.useState<string>("");
+  const [withdrawReason, setWithdrawReason] = React.useState("");
+  const [withdrawError, setWithdrawError] = React.useState<string | null>(null);
 
   // Default to the first expense item whenever a (new) claim is opened.
   React.useEffect(() => {
@@ -92,12 +120,40 @@ export function ClaimDetailDialog({ claim, open, onOpenChange }: ClaimDetailDial
     }
   }, [open, claim]);
 
+  useEffect(() => {
+    setWithdrawError(null);
+    setWithdrawReason("");
+  }, [open, claim?.id]);
+
+  const claimId = claim?.id;
+  const withdrawMutation = useWithdrawClaimMutation();
+
+  const handleWithdraw = React.useCallback(async () => {
+    if (!claimId) return;
+    if (!withdrawReason.trim()) {
+      setWithdrawError("Reason is required to withdraw a claim.");
+      return;
+    }
+
+    setWithdrawError(null);
+    try {
+      await withdrawMutation.mutateAsync({
+        claimId,
+        reason: withdrawReason.trim(),
+      });
+      onOpenChange(false);
+    } catch (err) {
+      setWithdrawError(getErrorMessage(err, "Failed to withdraw this claim."));
+    }
+  }, [claimId, onOpenChange, withdrawReason, withdrawMutation]);
+
   if (!claim) return null;
 
-  const currentIndex = getCurrentStepIndex(claim.status);
-  const manager = INITIAL_EMPLOYEES.find((e) => e.id === claim.employeeId)?.managerName;
+  const manager = INITIAL_EMPLOYEES.find(
+    (e) => e.id === claim.employeeId,
+  )?.managerName;
   const currentStepCopy = getCurrentStepCopy(claim.status, manager);
-  const canWithdraw = currentIndex <= 1;
+  const canWithdraw = WITHDRAWABLE_STATUSES.has(claim.status);
   const totalAmount = getClaimTotal(claim);
   const selectedItem =
     claim.items.find((item) => item.id === selectedItemId) ?? claim.items[0];
@@ -108,7 +164,8 @@ export function ClaimDetailDialog({ claim, open, onOpenChange }: ClaimDetailDial
         <DialogHeader className="pr-8">
           <DialogTitle className="text-xl">{claim.employeeName}</DialogTitle>
           <p className="text-sm text-muted-foreground">
-            {claim.claimTitle} · {claim.claimNumber} · {formatCurrency(totalAmount)}
+            {claim.claimTitle} · {claim.claimNumber} ·{" "}
+            {formatCurrency(totalAmount)}
           </p>
         </DialogHeader>
 
@@ -121,8 +178,12 @@ export function ClaimDetailDialog({ claim, open, onOpenChange }: ClaimDetailDial
 
           <div className="flex flex-col gap-4">
             <div className="rounded-lg border bg-secondary/10 p-4">
-              <p className="text-sm font-semibold text-secondary">{currentStepCopy.title}</p>
-              <p className="mt-1 text-sm text-muted-foreground">{currentStepCopy.body}</p>
+              <p className="text-sm font-semibold text-secondary">
+                {currentStepCopy.title}
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {currentStepCopy.body}
+              </p>
             </div>
 
             {selectedItem && (
@@ -131,7 +192,10 @@ export function ClaimDetailDialog({ claim, open, onOpenChange }: ClaimDetailDial
                   <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                     Expense item
                   </p>
-                  <Select value={selectedItem.id} onValueChange={setSelectedItemId}>
+                  <Select
+                    value={selectedItem.id}
+                    onValueChange={setSelectedItemId}
+                  >
                     <SelectTrigger className="h-9 text-foreground">
                       <SelectValue />
                     </SelectTrigger>
@@ -150,7 +214,9 @@ export function ClaimDetailDialog({ claim, open, onOpenChange }: ClaimDetailDial
                     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                       Category
                     </p>
-                    <p className="text-sm font-medium text-foreground">{selectedItem.category}</p>
+                    <p className="text-sm font-medium text-foreground">
+                      {selectedItem.category}
+                    </p>
                   </div>
                   <div>
                     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -173,14 +239,19 @@ export function ClaimDetailDialog({ claim, open, onOpenChange }: ClaimDetailDial
                       Amount
                     </p>
                     <p className="text-sm font-semibold text-foreground">
-                      {formatCurrency(selectedItem.amount, selectedItem.currency)}
+                      {formatCurrency(
+                        selectedItem.amount,
+                        selectedItem.currency,
+                      )}
                     </p>
                   </div>
                   <div className="col-span-2">
                     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                       Description
                     </p>
-                    <p className="text-sm text-foreground">{selectedItem.description}</p>
+                    <p className="text-sm text-foreground">
+                      {selectedItem.description}
+                    </p>
                   </div>
                 </div>
 
@@ -192,16 +263,45 @@ export function ClaimDetailDialog({ claim, open, onOpenChange }: ClaimDetailDial
               </>
             )}
 
-            <div className="mt-2 flex items-center border-t pt-4">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!canWithdraw}
-                className="text-destructive hover:text-destructive"
-              >
-                <Undo2 />
-                Withdraw claim
-              </Button>
+            <div className="grid gap-3 border-t pt-4">
+              <div>
+                <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Withdrawal reason
+                </label>
+                <Textarea
+                  value={withdrawReason}
+                  onChange={(event) => setWithdrawReason(event.target.value)}
+                  placeholder="Enter why you need to withdraw this claim"
+                  className={`mt-2 ${withdrawError ? "border-destructive text-destructive" : ""}`}
+                  rows={3}
+                  disabled={!canWithdraw || withdrawMutation.isPending}
+                  aria-invalid={Boolean(withdrawError)}
+                />
+                {withdrawError && (
+                  <p className="mt-2 text-sm text-destructive">
+                    {withdrawError}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={
+                    !canWithdraw ||
+                    withdrawMutation.isPending ||
+                    !withdrawReason.trim()
+                  }
+                  onClick={handleWithdraw}
+                  className="text-destructive hover:text-destructive"
+                >
+                  <Undo2 />
+                  {withdrawMutation.isPending
+                    ? "Withdrawing..."
+                    : "Withdraw claim"}
+                </Button>
+              </div>
             </div>
           </div>
         </div>

@@ -44,6 +44,12 @@ logger = get_logger(__name__)
 # Amounts within this tolerance are "the same amount" for duplicate detection.
 DUPLICATE_AMOUNT_TOLERANCE = Decimal("0.01")
 
+#: Claim states that closed *without* the expense being paid, and therefore do not make a re-filing
+#: of the same expense a duplicate. ``Withdrawn`` belongs here for the same reason ``Rejected``
+#: does — and more strongly: withdrawing is precisely what an employee does *before* re-submitting
+#: a corrected claim, so counting it as a duplicate would block the flow it exists to enable.
+UNPAID_CLOSED_STATUSES = (ClaimStatus.REJECTED, ClaimStatus.WITHDRAWN)
+
 
 @dataclass(frozen=True)
 class ClaimQuery:
@@ -221,9 +227,10 @@ class ClaimRepository(BaseRepository[Claim]):
         """Items that look like the same expense filed twice.
 
         Same employee, same vendor (case/whitespace-insensitive), same expense date, and the same
-        amount within :data:`DUPLICATE_AMOUNT_TOLERANCE`. Rejected work is excluded by default —
-        re-filing a corrected version of a rejected expense is legitimate — and that now means
-        **two** filters: the claim as a whole may be rejected, or just this line of it.
+        amount within :data:`DUPLICATE_AMOUNT_TOLERANCE`. Work that closed unpaid
+        (:data:`UNPAID_CLOSED_STATUSES`) is excluded by default — re-filing a corrected version of a
+        rejected or withdrawn expense is legitimate — and that means **two** filters: the claim as a
+        whole may be closed unpaid, or just this line of it may be rejected.
         """
         vendor = (merchant_vendor or "").strip().lower()
         amount = Decimal(amount_usd)
@@ -241,7 +248,7 @@ class ClaimRepository(BaseRepository[Claim]):
         )
         if not include_rejected:
             stmt = stmt.where(
-                Claim.status != ClaimStatus.REJECTED,
+                Claim.status.not_in(UNPAID_CLOSED_STATUSES),
                 ExpenseItem.status != ExpenseItemStatus.REJECTED,
             )
         if exclude_claim_id is not None:
@@ -267,7 +274,7 @@ class ClaimRepository(BaseRepository[Claim]):
                 Claim.employee_id == employee_id,
                 ExpenseItem.expense_date == expense_date,
                 func.lower(func.btrim(ExpenseItem.merchant_vendor)) == vendor,
-                Claim.status != ClaimStatus.REJECTED,
+                Claim.status.not_in(UNPAID_CLOSED_STATUSES),
                 ExpenseItem.status != ExpenseItemStatus.REJECTED,
             )
         )
@@ -516,6 +523,34 @@ class ClaimRepository(BaseRepository[Claim]):
             step_name="Reimbursement",
             action=f"Reimbursed claim {claim.claim_number}",
             notes=notes,
+        )
+
+    def withdraw_claim(
+        self,
+        claim: Claim,
+        *,
+        actor_role: str,
+        actor_sub: Optional[str] = None,
+        actor_name: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> Claim:
+        """Record the owner withdrawing the claim (``-> Withdrawn``, terminal).
+
+        ``withdrawal_reason`` is kept distinct from ``rejection_reason``: nothing was rejected, and
+        conflating the two would make a withdrawn claim read as a reviewer's decision in the audit
+        trail and in every report that groups by reason.
+        """
+        claim.withdrawal_reason = reason or claim.withdrawal_reason
+        return self.transition_status(
+            claim,
+            ClaimStatus.WITHDRAWN,
+            actor_role=actor_role,
+            actor_sub=actor_sub,
+            actor_name=actor_name,
+            step_name="Withdrawal",
+            action=f"Withdrew claim {claim.claim_number}",
+            notes=reason,
+            outcome="WARNING",
         )
 
     def flag_fraud(

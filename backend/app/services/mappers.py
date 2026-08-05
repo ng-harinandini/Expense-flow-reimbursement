@@ -258,10 +258,12 @@ def claim_to_dict(claim: Claim, *, include_internal_comments: bool = True) -> di
         ),
         "decisionNotes": claim.decision_notes,
         "rejectionReason": claim.rejection_reason,
+        "withdrawalReason": claim.withdrawal_reason,
         "reimbursementReference": claim.reimbursement_reference,
         "approvedAt": _iso(claim.approved_at),
         "rejectedAt": _iso(claim.rejected_at),
         "reimbursedAt": _iso(claim.reimbursed_at),
+        "withdrawnAt": _iso(claim.withdrawn_at),
         "createdAt": _iso(claim.created_at),
         "updatedAt": _iso(claim.updated_at),
         # Clients echo this back on writes to get optimistic-concurrency protection.

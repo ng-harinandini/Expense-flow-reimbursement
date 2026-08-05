@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # Root log level for the structured JSON logger (app.core.logging).
     LOG_LEVEL: str = "INFO"
 
+    # --- CORS ---
+    #: Comma-separated frontend origins allowed to call this API, e.g.
+    #: "http://localhost:3000,https://app.example.com". Kept as a plain string because
+    #: pydantic-settings would otherwise try to JSON-decode a list-typed field.
+    FE_URL: str = ""
+
     # --- Database (PostgreSQL only) ---
     DATABASE_URL: Optional[str] = None
     DB_USER: Optional[str] = None
@@ -98,6 +104,19 @@ class Settings(BaseSettings):
     @property
     def database_configured(self) -> bool:
         return self.database_url is not None
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Allowed CORS origins parsed from FE_URL.
+
+        Blank entries and trailing slashes are dropped — the CORS spec matches the Origin header
+        exactly, and browsers never send a trailing slash.
+        """
+        return [
+            origin.strip().rstrip("/")
+            for origin in self.FE_URL.split(",")
+            if origin.strip()
+        ]
 
     @property
     def cognito_region(self) -> str:

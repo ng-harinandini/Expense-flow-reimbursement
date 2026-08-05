@@ -963,6 +963,104 @@ class ClaimService:
             actor=actor,
         )
 
+    # --- withdrawal ----------------------------------------------------------
+
+    def withdraw_claim(
+        self,
+        identifier: str,
+        *,
+        actor: Actor,
+        reason: Optional[str] = None,
+        expected_version: Optional[int] = None,
+    ) -> Claim:
+        """Withdraw an entire claim on its owner's behalf (``-> Withdrawn``, terminal).
+
+        Withdrawal is the employee's counterpart to a reviewer's rejection: it closes the claim and
+        every open approval step in one transaction, but records *no* decision — nothing was judged.
+        The whole claim goes at once; there is no per-item withdrawal, because a partially withdrawn
+        report has no meaning to the approver looking at it.
+
+        Ownership is enforced through :meth:`get_claim_for_actor`, so an employee withdrawing
+        somebody else's claim gets 404 rather than a hint that it exists. Which states allow it is
+        :func:`validators.require_withdrawable` — notably not ``Flagged_Fraud``.
+        """
+        claim = self.get_claim_for_actor(identifier, actor=actor)
+
+        # An employee may only ever withdraw their own; the ownership check above already
+        # guarantees it, but admins resolve any claim, so re-assert explicitly for them.
+        if actor.role == "employee":
+            employee = self._employees.resolve_actor_employee(actor)
+            validators.require_claim_ownership(claim, employee)
+
+        # Client-supplied version turns a lost race (a manager approving while the employee
+        # withdraws) into 409 instead of one silently overwriting the other.
+        if expected_version is not None and claim.version != expected_version:
+            raise ConcurrentUpdateError("Claim", claim.claim_number)
+
+        validators.require_withdrawable(claim)
+
+        before_status = claim.status
+        note = (reason or "").strip() or None
+
+        workflow = self._workflows.get_active_for_claim(claim.id)
+        claim = self._claims.withdraw_claim(
+            claim,
+            actor_role=actor.role,
+            actor_sub=actor.sub,
+            actor_name=actor.name,
+            reason=note,
+        )
+        if workflow is not None:
+            self._workflows.cancel_open_steps(
+                workflow,
+                decided_by_sub=actor.sub,
+                reason=note or "Claim withdrawn by the employee.",
+            )
+
+        self._claims.add_comment(
+            claim,
+            body=(
+                f"Claim withdrawn by {actor.name}."
+                if note is None
+                else f"Claim withdrawn by {actor.name}: {note}"
+            ),
+            author_name=actor.name,
+            author_role=actor.role,
+            author_sub=actor.sub,
+        )
+
+        self._audit.record(
+            actor=actor,
+            action=AuditAction.CLAIM_WITHDRAW,
+            entity_type=AuditEntity.CLAIM,
+            entity_id=claim.claim_number,
+            details=(
+                f"Withdrew claim {claim.claim_number} from {before_status.value}"
+                + (f": {note}" if note else ".")
+            ),
+            before={"status": before_status.value},
+            after={"status": claim.status.value, "claimId": str(claim.id)},
+        )
+        # Deliberately excludes `reason`, consistent with the approval/rejection hook above:
+        # decision memory has no role-based visibility filtering yet, and an employee's free-text
+        # withdrawal reason is not something to make broadly retrievable.
+        self._remember(
+            DecisionMemoryKind.CLAIM, claim.id,
+            f"Claim {claim.claim_number} ({claim.currency} {claim.total_amount_usd:.2f} across "
+            f"{claim.item_count} item(s)) withdrawn by {actor.name} ({actor.role}) from "
+            f"{before_status.value}.",
+            actor=actor,
+        )
+        logger.info(
+            "claim.withdrawn",
+            extra={
+                "claimNumber": claim.claim_number,
+                "fromStatus": before_status.value,
+                "actorRole": actor.role,
+            },
+        )
+        return self._claims.refresh(claim)
+
     # --- reviewer assignment -------------------------------------------------
 
     def assign_reviewer(

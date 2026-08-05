@@ -15,6 +15,9 @@ Canonical lifecycle (spec vocabulary on the left, this module's members on the r
       ↓
     Reimbursed       REIMBURSED          (terminal)
 
+    Withdrawn        WITHDRAWN           (terminal) — the owner's own act, reachable from any
+                                         pre-approval state except FLAGGED_FRAUD
+
 **Two independent enforcement layers, deliberately.**
 
 1. *Here* — :func:`assert_can_transition` is called by ``ClaimRepository.transition_status``,
@@ -43,13 +46,14 @@ SYSTEM_ROLE = "system"
 #: Legal ``current -> {allowed targets}`` edges. Absence of a key means "terminal".
 ALLOWED_TRANSITIONS: dict[ClaimStatus, frozenset[ClaimStatus]] = {
     ClaimStatus.DRAFT: frozenset({ClaimStatus.SUBMITTED}),
-    ClaimStatus.SUBMITTED: frozenset({ClaimStatus.PROCESSING}),
+    ClaimStatus.SUBMITTED: frozenset({ClaimStatus.PROCESSING, ClaimStatus.WITHDRAWN}),
     ClaimStatus.PROCESSING: frozenset(
         {
             ClaimStatus.AUTO_APPROVED,
             ClaimStatus.MANAGER_REVIEW,
             ClaimStatus.FINANCE_REVIEW,
             ClaimStatus.FLAGGED_FRAUD,
+            ClaimStatus.WITHDRAWN,
         }
     ),
     # An auto-approved claim still needs payout, may be confirmed by a human approver, and may be
@@ -60,6 +64,7 @@ ALLOWED_TRANSITIONS: dict[ClaimStatus, frozenset[ClaimStatus]] = {
             ClaimStatus.REIMBURSED,
             ClaimStatus.MANAGER_REVIEW,
             ClaimStatus.FLAGGED_FRAUD,
+            ClaimStatus.WITHDRAWN,
         }
     ),
     ClaimStatus.MANAGER_REVIEW: frozenset(
@@ -68,13 +73,21 @@ ALLOWED_TRANSITIONS: dict[ClaimStatus, frozenset[ClaimStatus]] = {
             ClaimStatus.APPROVED,
             ClaimStatus.REJECTED,
             ClaimStatus.FLAGGED_FRAUD,
+            ClaimStatus.WITHDRAWN,
         }
     ),
     ClaimStatus.FINANCE_REVIEW: frozenset(
-        {ClaimStatus.APPROVED, ClaimStatus.REJECTED, ClaimStatus.FLAGGED_FRAUD}
+        {
+            ClaimStatus.APPROVED,
+            ClaimStatus.REJECTED,
+            ClaimStatus.FLAGGED_FRAUD,
+            ClaimStatus.WITHDRAWN,
+        }
     ),
     ClaimStatus.APPROVED: frozenset({ClaimStatus.REIMBURSED, ClaimStatus.FLAGGED_FRAUD}),
-    # A fraud investigation either clears the claim back into review, or ends it.
+    # A fraud investigation either clears the claim back into review, or ends it. Deliberately no
+    # edge to WITHDRAWN: an employee must not be able to end an investigation into their own claim
+    # by withdrawing it — see WITHDRAWABLE_STATUSES.
     ClaimStatus.FLAGGED_FRAUD: frozenset(
         {
             ClaimStatus.MANAGER_REVIEW,
@@ -85,6 +98,7 @@ ALLOWED_TRANSITIONS: dict[ClaimStatus, frozenset[ClaimStatus]] = {
     ),
     ClaimStatus.REJECTED: frozenset(),
     ClaimStatus.REIMBURSED: frozenset(),
+    ClaimStatus.WITHDRAWN: frozenset(),
 }
 
 #: States from which nothing may move. Money has left, or the claim is closed.
@@ -104,6 +118,7 @@ ROLES_BY_TARGET: dict[ClaimStatus, frozenset[str]] = {
     # Only finance/admin move money.
     ClaimStatus.REIMBURSED: frozenset({"finance", "admin"}),
     ClaimStatus.FLAGGED_FRAUD: frozenset({SYSTEM_ROLE, "manager", "finance", "admin", "auditor"}),
+    ClaimStatus.WITHDRAWN: frozenset({"employee", "admin"}),
 }
 
 #: Target status -> the ``Claim`` timestamp column stamped when it is reached.
@@ -116,6 +131,7 @@ TIMESTAMP_FIELD_BY_STATUS: dict[ClaimStatus, str] = {
     ClaimStatus.AUTO_APPROVED: "approved_at",
     ClaimStatus.REJECTED: "rejected_at",
     ClaimStatus.REIMBURSED: "reimbursed_at",
+    ClaimStatus.WITHDRAWN: "withdrawn_at",
 }
 
 #: Statuses in which the claim's own expense fields may still be edited by its owner.
@@ -124,6 +140,21 @@ EDITABLE_STATUSES: frozenset[ClaimStatus] = frozenset({ClaimStatus.DRAFT})
 #: Statuses that represent an approval outcome — used by the "no changes after approval" rule.
 APPROVED_STATUSES: frozenset[ClaimStatus] = frozenset(
     {ClaimStatus.APPROVED, ClaimStatus.AUTO_APPROVED, ClaimStatus.REIMBURSED}
+)
+
+#: Statuses from which the claim's owner may withdraw it.
+#:
+#: A subset of the states with a legal ``-> Withdrawn`` edge, deliberately: the edge list says what
+#: the *lifecycle* permits, this says what an **employee** may initiate. ``FLAGGED_FRAUD`` is absent
+#: from both — a claim under investigation cannot be made to disappear by its subject.
+WITHDRAWABLE_STATUSES: frozenset[ClaimStatus] = frozenset(
+    {
+        ClaimStatus.SUBMITTED,
+        ClaimStatus.PROCESSING,
+        ClaimStatus.MANAGER_REVIEW,
+        ClaimStatus.FINANCE_REVIEW,
+        ClaimStatus.AUTO_APPROVED,
+    }
 )
 
 #: Statuses a reviewer may act on (assignment, decisions).

@@ -9,6 +9,7 @@ Error mapping is handled centrally (``app.core.errors``), so no route catches do
     unknown claim / employee        -> 404
     not the caller's claim          -> 404 (employees) / 403 (explicit ownership failure)
     illegal lifecycle transition    -> 409  (with the legal next states in the body)
+    withdrawal of a flagged claim   -> 403
     duplicate submission            -> 409
     receipt already claimed         -> 409
     concurrent modification         -> 409
@@ -22,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, status
 
 from app.core.deps import (
     CurrentUser,
@@ -41,6 +42,7 @@ from app.schemas.schemas import (
     ExpenseClaimCreateSchema,
     ExpenseClaimUpdateSchema,
     ItemDecisionRequestSchema,
+    WithdrawClaimSchema,
 )
 from app.services.claim_service import ClaimService
 from app.services.mappers import claim_to_dict
@@ -173,6 +175,26 @@ def execute_claim_action(
         action=payload.action,
         actor=actor,
         notes=payload.notes,
+        expected_version=payload.expectedVersion,
+    )
+    uow.commit()
+    return _serialize(claim, actor)
+
+
+@router.post("/{claim_id}/withdraw", response_model=dict)
+def withdraw_claim(
+    claim_id: str,
+    # Defaulted so a bodyless POST is valid — a withdrawal needs no justification.
+    payload: WithdrawClaimSchema,
+    actor: Actor = Depends(get_actor),
+    service: ClaimService = Depends(get_claim_service),
+    uow: UnitOfWork = Depends(get_unit_of_work),
+):
+    "Withdraw claim by employee"
+    claim = service.withdraw_claim(
+        claim_id,
+        actor=actor,
+        reason=payload.reason,
         expected_version=payload.expectedVersion,
     )
     uow.commit()

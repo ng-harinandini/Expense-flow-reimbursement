@@ -28,6 +28,7 @@ from app.domain.errors import (
     ValidationError,
 )
 from app.models.claim import Claim
+from app.models.enums import ClaimStatus
 from app.models.expense_item import ExpenseItem
 from app.models.organization import Employee
 from app.services import receipt_extraction
@@ -116,6 +117,31 @@ def require_editable(claim: Claim) -> None:
                 "editableStatuses": sorted(s.value for s in fsm.EDITABLE_STATUSES),
             },
         )
+
+
+def require_withdrawable(claim: Claim) -> None:
+    """A claim may only be withdrawn by its owner before a payout decision is final.
+    """
+    if claim.status in fsm.WITHDRAWABLE_STATUSES:
+        return
+
+    if claim.status == ClaimStatus.FLAGGED_FRAUD:
+        raise ForbiddenError(
+            f"Claim {claim.claim_number} is under fraud investigation and cannot be withdrawn.",
+            details={
+                "claimNumber": claim.claim_number,
+                "currentStatus": claim.status.value,
+            },
+        )
+
+    raise ImmutableEntityError(
+        f"Claim {claim.claim_number} is '{claim.status.value}' and can no longer be withdrawn.",
+        details={
+            "claimNumber": claim.claim_number,
+            "currentStatus": claim.status.value,
+            "withdrawableStatuses": sorted(s.value for s in fsm.WITHDRAWABLE_STATUSES),
+        },
+    )
 
 
 def require_not_terminal(claim: Claim) -> None:

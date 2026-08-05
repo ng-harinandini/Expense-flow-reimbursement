@@ -6,6 +6,7 @@ import {
   BadgeCheck,
   Check,
   FileText,
+  Undo2,
   UserCircle,
   Wallet,
   X,
@@ -66,6 +67,7 @@ const TERMINAL_STEP_INDEX_BY_STATUS: Record<ClaimStatus, number> = {
   Rejected: 2,
   Disbursed: 3,
   Flagged_Fraud: 1,
+  Withdrawn: 0,
 };
 
 export function getCurrentStepIndex(status: ClaimStatus): number {
@@ -77,6 +79,7 @@ const STEP_STATUS_LABEL_OVERRIDE: Partial<Record<ClaimStatus, string>> = {
   Auto_Approved: "Approved",
   Rejected: "Rejected",
   Flagged_Fraud: "Flagged for review",
+  Withdrawn: "Withdrawn",
 };
 
 interface StepVisualOverride {
@@ -97,6 +100,9 @@ function getCurrentStepOverride(status: ClaimStatus): StepVisualOverride | null 
       return { icon: X, circleClass: "bg-destructive text-white", textClass: "text-destructive" };
     case "Flagged_Fraud":
       return { icon: AlertTriangle, circleClass: "bg-destructive text-white", textClass: "text-destructive" };
+    case "Withdrawn":
+      // Neutral, not destructive: the employee chose to close this, nothing went wrong.
+      return { icon: Undo2, circleClass: "bg-muted text-muted-foreground", textClass: "text-muted-foreground" };
     default:
       return null;
   }
