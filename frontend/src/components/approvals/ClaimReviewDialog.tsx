@@ -22,7 +22,6 @@ import type { Claim } from "@/types";
 import {
   formatCurrency,
   formatDate,
-  getClaimTotal,
   StatusBadge,
 } from "@/components/my_claims/columns";
 
@@ -74,7 +73,7 @@ export function ClaimReviewDialog({
 
   if (!claim) return null;
 
-  const totalAmount = getClaimTotal(claim);
+  const totalAmount = claim.totalAmount;
   const selectedItem =
     claim.items.find((item) => item.id === selectedItemId) ?? claim.items[0];
 

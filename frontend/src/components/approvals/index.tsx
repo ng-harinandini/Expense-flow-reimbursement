@@ -1,15 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { AgGridReact } from "ag-grid-react";
-import {
-  AllCommunityModule,
-  ModuleRegistry,
-  themeQuartz,
-  type ColDef,
-} from "ag-grid-community";
+import type { ColDef } from "ag-grid-community";
 import { ClipboardCheck, Search } from "lucide-react";
 
+import { DataGrid } from "@/components/shared/DataGrid";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -28,8 +23,6 @@ import { useExpandableItems } from "@/components/my_claims/useExpandableItems";
 
 import { buildColumnDefs } from "./columns";
 import { ClaimReviewDialog } from "./ClaimReviewDialog";
-
-ModuleRegistry.registerModules([AllCommunityModule]);
 
 // Tall enough for the stacked claim-title + date-range cell.
 const ROW_HEIGHT = 64;
@@ -177,8 +170,7 @@ function Approvals() {
       </div>
 
       <div className="h-[560px] px-6 pb-6">
-        <AgGridReact
-          theme={themeQuartz}
+        <DataGrid
           {...expandableProps}
           defaultColDef={defaultColDef}
           overlayNoRowsTemplate="No claims found matching your filter criteria."

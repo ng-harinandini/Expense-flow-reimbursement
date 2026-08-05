@@ -1,15 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { AgGridReact } from "ag-grid-react";
-import {
-  AllCommunityModule,
-  ModuleRegistry,
-  themeQuartz,
-  type ColDef,
-} from "ag-grid-community";
+import type { ColDef } from "ag-grid-community";
 import { PencilLine, ShieldCheck, Sparkles } from "lucide-react";
 
+import { DataGrid } from "@/components/shared/DataGrid";
 import { Button } from "@/components/ui/Button";
 import { INITIAL_POLICY_RULES } from "@/data/policyRules";
 import type { AdminPolicyRule } from "@/types";
@@ -19,8 +14,6 @@ import { nextRuleId, formValuesToPolicyRule } from "./helpers";
 import { AddPolicyRuleDialog } from "./AddPolicyRuleDialog";
 import { AddPolicyRuleWithAIDialog } from "./AddPolicyRuleWithAIDialog";
 import type { PolicyRuleFormValues } from "./policyRuleSchema";
-
-ModuleRegistry.registerModules([AllCommunityModule]);
 
 function PolicyGuidelines() {
   const [rules, setRules] = React.useState<AdminPolicyRule[]>(INITIAL_POLICY_RULES);
@@ -71,8 +64,7 @@ function PolicyGuidelines() {
       </div>
 
       <div className="h-[560px] px-6 pb-6">
-        <AgGridReact<AdminPolicyRule>
-          theme={themeQuartz}
+        <DataGrid<AdminPolicyRule>
           rowData={rules}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}

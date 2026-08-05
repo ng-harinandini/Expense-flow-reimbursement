@@ -2,15 +2,10 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { AgGridReact } from "ag-grid-react";
-import {
-  AllCommunityModule,
-  ModuleRegistry,
-  themeQuartz,
-  type ColDef,
-} from "ag-grid-community";
+import type { ColDef } from "ag-grid-community";
 import { FileText, PlusCircle, Search } from "lucide-react";
 
+import { DataGrid } from "@/components/shared/DataGrid";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/input";
 import {
@@ -28,8 +23,6 @@ import { CENTERED_COL_DEF, buildColumnDefs } from "./columns";
 import { STATUS_LABELS } from "./status";
 import { ClaimDetailDialog } from "./ClaimDetailDialog";
 import { useExpandableItems } from "./useExpandableItems";
-
-ModuleRegistry.registerModules([AllCommunityModule]);
 
 const STATUS_OPTIONS: ClaimStatus[] = [
   "Submitted",
@@ -151,8 +144,7 @@ function MyClaims() {
             {getErrorMessage(error, "Failed to load claims.")}
           </div>
         ) : (
-          <AgGridReact
-            theme={themeQuartz}
+          <DataGrid
             {...expandableProps}
             defaultColDef={defaultColDef}
             loading={isLoading}

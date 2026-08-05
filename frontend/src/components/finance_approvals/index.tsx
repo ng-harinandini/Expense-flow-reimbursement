@@ -1,15 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { AgGridReact } from "ag-grid-react";
-import {
-  AllCommunityModule,
-  ModuleRegistry,
-  themeQuartz,
-  type ColDef,
-} from "ag-grid-community";
+import type { ColDef } from "ag-grid-community";
 import { BadgeCheck, Search } from "lucide-react";
 
+import { DataGrid } from "@/components/shared/DataGrid";
 import { Input } from "@/components/ui/input";
 import { INITIAL_MULTI_ITEM_CLAIMS } from "@/data/claims";
 import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
@@ -20,8 +15,6 @@ import { CENTERED_COL_DEF } from "@/components/my_claims/columns";
 
 import { buildColumnDefs, managerNameFor } from "./columns";
 import { FinanceReviewDialog } from "./FinanceReviewDialog";
-
-ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PENDING_STATUS: ClaimStatus = "Finance_Review";
 
@@ -136,8 +129,7 @@ function FinanceApprovals() {
       </div>
 
       <div className="h-[560px] px-6 pb-6">
-        <AgGridReact
-          theme={themeQuartz}
+        <DataGrid
           {...expandableProps}
           defaultColDef={defaultColDef}
           overlayNoRowsTemplate="No claims pending finance approval."
