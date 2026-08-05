@@ -630,6 +630,21 @@ class ClaimRepository(BaseRepository[Claim]):
             .where(ExpenseItem.id == item_id)
         )
 
+    def find_item_by_file_url(self, file_url: str) -> Optional[ExpenseItem]:
+        """The item whose receipt lives at ``file_url``.
+
+        Backs the receipt download's authorization: the requested object must correspond to a
+        persisted item, so the claim behind it can be access-checked. The same document can be
+        attached to more than one item (a legitimately re-used receipt, or a duplicate under
+        investigation) — any match is enough, since the caller re-checks claim access anyway.
+        """
+        return self._one_or_none(
+            select(ExpenseItem)
+            .options(joinedload(ExpenseItem.claim))
+            .where(ExpenseItem.file_url == file_url)
+            .order_by(ExpenseItem.created_at.asc())
+        )
+
     def refresh_totals(self, claim: Claim) -> Claim:
         """Re-read the trigger-maintained roll-ups.
 

@@ -20,13 +20,19 @@ import {
 } from "@/components/ui/select";
 import { INITIAL_MULTI_ITEM_CLAIMS } from "@/data/claims";
 import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
-import { STATUS_LABELS } from "@/components/my_claims/columns";
+import { STATUS_LABELS } from "@/components/my_claims/status";
+import { CENTERED_COL_DEF } from "@/components/my_claims/columns";
 import type { Claim, ClaimStatus, WorkflowStepLog } from "@/types";
+
+import { useExpandableItems } from "@/components/my_claims/useExpandableItems";
 
 import { buildColumnDefs } from "./columns";
 import { ClaimReviewDialog } from "./ClaimReviewDialog";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
+
+// Tall enough for the stacked claim-title + date-range cell.
+const ROW_HEIGHT = 64;
 
 const STATUS_OPTIONS: ClaimStatus[] = [
   "Submitted",
@@ -119,9 +125,12 @@ function Approvals() {
       resizable: true,
       sortable: true,
       filter: false,
+      ...CENTERED_COL_DEF,
     }),
     []
   );
+
+  const expandableProps = useExpandableItems(rowData, columnDefs, ROW_HEIGHT);
 
   return (
     <div className="rounded-xl border bg-card shadow-sm">
@@ -168,14 +177,13 @@ function Approvals() {
       </div>
 
       <div className="h-[560px] px-6 pb-6">
-        <AgGridReact<Claim>
+        <AgGridReact
           theme={themeQuartz}
-          rowData={rowData}
-          columnDefs={columnDefs}
+          {...expandableProps}
           defaultColDef={defaultColDef}
           overlayNoRowsTemplate="No claims found matching your filter criteria."
           domLayout="normal"
-          rowHeight={56}
+          rowHeight={ROW_HEIGHT}
           headerHeight={44}
           suppressCellFocus
         />

@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import {
   CATEGORY_ICONS,
   CATEGORY_PILL_COLORS,
+  formatDdMmYyyy,
   formatUsd,
   type ExpenseItemDraft,
 } from "./helpers";
@@ -95,8 +96,9 @@ export function ExpenseItemsTable({ items, onEdit, onDelete }: ExpenseItemsTable
                     </span>
                   </td>
                   <td className="px-3 py-3 whitespace-nowrap text-muted-foreground">
+                    {formatDdMmYyyy(item.expenseFromDate)}
                     {item.expenseToDate && item.expenseToDate !== item.expenseFromDate && (
-                      <> &ndash; {item.expenseToDate}</>
+                      <>-{formatDdMmYyyy(item.expenseToDate)}</>
                     )}
                   </td>
                   <td className="px-3 py-3">

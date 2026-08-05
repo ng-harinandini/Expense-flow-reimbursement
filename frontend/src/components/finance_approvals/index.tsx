@@ -15,12 +15,18 @@ import { INITIAL_MULTI_ITEM_CLAIMS } from "@/data/claims";
 import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
 import type { Claim, ClaimStatus, WorkflowStepLog } from "@/types";
 
+import { useExpandableItems } from "@/components/my_claims/useExpandableItems";
+import { CENTERED_COL_DEF } from "@/components/my_claims/columns";
+
 import { buildColumnDefs, managerNameFor } from "./columns";
 import { FinanceReviewDialog } from "./FinanceReviewDialog";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PENDING_STATUS: ClaimStatus = "Finance_Review";
+
+// Tall enough for the stacked claim-title + date-range cell.
+const ROW_HEIGHT = 64;
 
 function FinanceApprovals() {
   const [claims, setClaims] = React.useState<Claim[]>(INITIAL_MULTI_ITEM_CLAIMS);
@@ -94,9 +100,12 @@ function FinanceApprovals() {
       resizable: true,
       sortable: true,
       filter: false,
+      ...CENTERED_COL_DEF,
     }),
     []
   );
+
+  const expandableProps = useExpandableItems(rowData, columnDefs, ROW_HEIGHT);
 
   return (
     <div className="rounded-xl border bg-card shadow-sm">
@@ -127,14 +136,13 @@ function FinanceApprovals() {
       </div>
 
       <div className="h-[560px] px-6 pb-6">
-        <AgGridReact<Claim>
+        <AgGridReact
           theme={themeQuartz}
-          rowData={rowData}
-          columnDefs={columnDefs}
+          {...expandableProps}
           defaultColDef={defaultColDef}
           overlayNoRowsTemplate="No claims pending finance approval."
           domLayout="normal"
-          rowHeight={56}
+          rowHeight={ROW_HEIGHT}
           headerHeight={44}
           suppressCellFocus
         />

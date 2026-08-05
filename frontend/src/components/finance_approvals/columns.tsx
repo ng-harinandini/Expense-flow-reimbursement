@@ -1,7 +1,11 @@
 import type { ColDef, ICellRendererParams } from "ag-grid-community";
 
 import type { Claim } from "@/types";
-import { formatDate } from "@/components/my_claims/columns";
+import {
+  ClaimTitleCell,
+  ItemCountCell,
+  formatCurrency,
+} from "@/components/my_claims/columns";
 import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
 
 export function managerNameFor(claim: Claim) {
@@ -32,20 +36,30 @@ export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[]
     },
     {
       headerName: "Claim Title",
+      // Widest track: it carries two stacked lines, and the date range must not wrap.
       field: "claimTitle",
-      flex: 1.4,
-      minWidth: 190,
-      cellClass: "font-medium",
+      flex: 2,
+      minWidth: 230,
+      cellRenderer: (params: ICellRendererParams<Claim>) =>
+        params.data ? <ClaimTitleCell claim={params.data} /> : null,
     },
     {
-      headerName: "From - To Date",
-      colId: "dateRange",
-      flex: 1.2,
-      minWidth: 180,
-      valueGetter: (params) =>
-        params.data
-          ? `${formatDate(params.data.fromDate)} – ${formatDate(params.data.toDate)}`
-          : "",
+      headerName: "Items",
+      colId: "itemCount",
+      flex: 0.7,
+      minWidth: 90,
+      valueGetter: (params) => (params.data ? params.data.items.length : 0),
+      cellRenderer: (params: ICellRendererParams<Claim>) =>
+        params.data ? <ItemCountCell claim={params.data} /> : null,
+    },
+    {
+      headerName: "Total Amount",
+      field: "totalAmount",
+      flex: 1,
+      minWidth: 130,
+      cellClass: "font-semibold",
+      // valueFormatter: (params) =>
+      //   formatCurrency(params.value as number, params.data?.currency),
     },
     {
       headerName: "Action",

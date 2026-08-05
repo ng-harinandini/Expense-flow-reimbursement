@@ -20,6 +20,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     fromDate: '2026-07-20',
     toDate: '2026-07-24',
     status: 'Manager_Review',
+    totalAmount: 18050,
     items: [
       {
         id: 'item-2001-1',
@@ -90,6 +91,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     fromDate: '2026-06-10',
     toDate: '2026-06-11',
     status: 'Auto_Approved',
+    totalAmount: 38.5,
     items: [
       {
         id: 'item-2002-1',
@@ -130,6 +132,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     fromDate: '2026-05-02',
     toDate: '2026-05-03',
     status: 'Flagged_Fraud',
+    totalAmount: 602,
     items: [
       {
         id: 'item-2003-1',
@@ -180,6 +183,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     fromDate: '2025-11-30',
     toDate: '2025-12-04',
     status: 'Disbursed',
+    totalAmount: 13300,
     items: [
       {
         id: 'item-2004-1',
@@ -248,6 +252,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     fromDate: '2026-07-27',
     toDate: '2026-07-27',
     status: 'Submitted',
+    totalAmount: 54,
     items: [
       {
         id: 'item-2005-1',
@@ -280,6 +285,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     fromDate: '2026-07-10',
     toDate: '2026-07-12',
     status: 'Finance_Review',
+    totalAmount: 8600,
     items: [
       {
         id: 'item-2006-1',

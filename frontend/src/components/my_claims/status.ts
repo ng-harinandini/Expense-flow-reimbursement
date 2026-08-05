@@ -25,5 +25,5 @@ export const STATUS_BADGE_CLASSES: Record<ClaimStatus, string> = {
   Rejected: "bg-destructive/15 text-destructive border-transparent",
   Disbursed: "bg-secondary/15 text-secondary border-transparent",
   Flagged_Fraud: "bg-destructive/15 text-destructive border-transparent",
-  Withdrawn: "bg-muted text-muted-foreground border-transparent",
+  Withdrawn: "bg-amber-500/15 text-amber-600 border-transparent",
 };

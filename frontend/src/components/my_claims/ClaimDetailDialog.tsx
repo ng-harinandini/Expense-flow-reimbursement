@@ -18,14 +18,24 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/Button";
+import { ReceiptViewer } from "@/components/ReceiptViewer";
 import { useWithdrawClaimMutation } from "@/api/claims";
 import { getErrorMessage } from "@/lib/apiError";
 import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
 import type { Claim } from "@/types";
 
-import { formatCurrency, formatDate, getClaimTotal } from "./columns";
+import {
+  StatusBadge,
+  formatCurrency,
+  formatDate,
+  formatDateTime,
+  getClaimTotal,
+} from "./columns";
 import { ClaimStatusStepper } from "./ClaimStatusStepper";
 
+// Currently unused: the status card that rendered this copy is commented out in the layout below,
+// pending a decision on whether it comes back alongside the header status badge.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function getCurrentStepCopy(
   status: Claim["status"],
   manager?: string,
@@ -152,39 +162,50 @@ export function ClaimDetailDialog({
   const manager = INITIAL_EMPLOYEES.find(
     (e) => e.id === claim.employeeId,
   )?.managerName;
-  const currentStepCopy = getCurrentStepCopy(claim.status, manager);
   const canWithdraw = WITHDRAWABLE_STATUSES.has(claim.status);
+  const isWithdrawn = claim.status === "Withdrawn";
   const totalAmount = getClaimTotal(claim);
   const selectedItem =
     claim.items.find((item) => item.id === selectedItemId) ?? claim.items[0];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+      {/* The base DialogContent caps width at calc(100%-2rem); both that and the sm: breakpoint
+          value have to be raised or the wider three-column layout has nowhere to go. */}
+      <DialogContent className="max-h-[90vh] max-w-[calc(100%-10rem)] overflow-y-auto sm:max-w-[70rem]">
         <DialogHeader className="pr-8">
-          <DialogTitle className="text-xl">{claim.employeeName}</DialogTitle>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <DialogTitle className="text-xl">{claim.employeeName}</DialogTitle>
+            <StatusBadge status={claim.status} />
+          </div>
           <p className="text-sm text-muted-foreground">
             {claim.claimTitle} · {claim.claimNumber} ·{" "}
             {formatCurrency(totalAmount)}
           </p>
         </DialogHeader>
 
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-[auto_1fr]">
+        {/* Two narrow columns (stepper, item details) + one wide one for the receipt. The
+            receipt column is the only `1fr` track, so it absorbs all the extra width. */}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[auto_22rem_1fr]">
+          {/* Column 1 — progress stepper */}
           <ClaimStatusStepper
             claim={claim}
             manager={manager}
-            className="sm:pr-6 sm:border-r"
+            className="lg:border-r lg:pr-6"
           />
 
-          <div className="flex flex-col gap-4">
-            <div className="rounded-lg border bg-secondary/10 p-4">
+          {/* Column 2 — item picker, then that item's extracted details, stacked vertically */}
+          <div className="flex flex-col gap-4 lg:border-r lg:pr-6">
+            {/* Current-status card hidden for now — the status badge in the header covers it.
+                `getCurrentStepCopy` is kept because restoring this block is the intended path. */}
+            {/* <div className="rounded-lg border bg-secondary/10 p-4">
               <p className="text-sm font-semibold text-secondary">
                 {currentStepCopy.title}
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
                 {currentStepCopy.body}
               </p>
-            </div>
+            </div> */}
 
             {selectedItem && (
               <>
@@ -196,7 +217,7 @@ export function ClaimDetailDialog({
                     value={selectedItem.id}
                     onValueChange={setSelectedItemId}
                   >
-                    <SelectTrigger className="h-9 text-foreground">
+                    <SelectTrigger className="h-9 w-full text-foreground">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -209,7 +230,7 @@ export function ClaimDetailDialog({
                   </Select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                <div className="flex flex-col gap-3">
                   <div>
                     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                       Category
@@ -245,7 +266,7 @@ export function ClaimDetailDialog({
                       )}
                     </p>
                   </div>
-                  <div className="col-span-2">
+                  <div>
                     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                       Description
                     </p>
@@ -254,56 +275,84 @@ export function ClaimDetailDialog({
                     </p>
                   </div>
                 </div>
-
-                <img
-                  src={selectedItem.receiptUrl}
-                  alt={`Receipt for ${selectedItem.merchantVendor}`}
-                  className="max-h-48 w-full rounded-lg border object-cover"
-                />
               </>
             )}
 
-            <div className="grid gap-3 border-t pt-4">
-              <div>
-                <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Withdrawal reason
-                </label>
-                <Textarea
-                  value={withdrawReason}
-                  onChange={(event) => setWithdrawReason(event.target.value)}
-                  placeholder="Enter why you need to withdraw this claim"
-                  className={`mt-2 ${withdrawError ? "border-destructive text-destructive" : ""}`}
-                  rows={3}
-                  disabled={!canWithdraw || withdrawMutation.isPending}
-                  aria-invalid={Boolean(withdrawError)}
-                />
-                {withdrawError && (
-                  <p className="mt-2 text-sm text-destructive">
-                    {withdrawError}
+            {isWithdrawn ? (
+              <div className="mt-auto grid gap-3 border-t pt-4">
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Withdrawn on
                   </p>
-                )}
-              </div>
+                  <p className="mt-1 text-sm font-medium text-foreground">
+                    {claim.withdrawnAt ? formatDateTime(claim.withdrawnAt) : "—"}
+                  </p>
 
-              <div className="flex items-center gap-3">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={
-                    !canWithdraw ||
-                    withdrawMutation.isPending ||
-                    !withdrawReason.trim()
-                  }
-                  onClick={handleWithdraw}
-                  className="text-destructive hover:text-destructive"
-                >
-                  <Undo2 />
-                  {withdrawMutation.isPending
-                    ? "Withdrawing..."
-                    : "Withdraw claim"}
-                </Button>
+                  <p className="mt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Withdrawal reason
+                  </p>
+                  <p className="mt-1 text-sm text-foreground">
+                    {claim.withdrawalReason?.trim() || "No reason was recorded."}
+                  </p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="mt-auto grid gap-3 border-t pt-4">
+                <div>
+                  <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Withdrawal reason
+                  </label>
+                  <Textarea
+                    value={withdrawReason}
+                    onChange={(event) => setWithdrawReason(event.target.value)}
+                    placeholder="Enter why you need to withdraw this claim"
+                    className={`mt-2 ${withdrawError ? "border-destructive text-destructive" : ""}`}
+                    rows={3}
+                    disabled={!canWithdraw || withdrawMutation.isPending}
+                    aria-invalid={Boolean(withdrawError)}
+                  />
+                  {withdrawError && (
+                    <p className="mt-2 text-sm text-destructive">
+                      {withdrawError}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={
+                      !canWithdraw ||
+                      withdrawMutation.isPending ||
+                      !withdrawReason.trim()
+                    }
+                    onClick={handleWithdraw}
+                    className="text-destructive hover:text-destructive"
+                  >
+                    <Undo2 />
+                    {withdrawMutation.isPending
+                      ? "Withdrawing..."
+                      : "Withdraw claim"}
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
+
+          {selectedItem && (
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Receipt
+              </p>
+              <ReceiptViewer
+                key={selectedItem.id}
+                fileUrl={selectedItem.receiptUrl}
+                alt={`Receipt for ${selectedItem.merchantVendor}`}
+                className="h-[70vh]"
+              />
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

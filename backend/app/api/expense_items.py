@@ -16,14 +16,17 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import Response
 
 from app.ai.duplicate_detection.hashing import sha256_hex
 from app.core.config import settings
 from app.core.deps import (
     CurrentUser,
+    get_actor,
     get_audit_service,
     get_claim_repository,
+    get_claim_service,
     get_employee_service,
     get_unit_of_work,
     require_roles,
@@ -36,13 +39,83 @@ from app.repositories.claim_repository import ClaimRepository
 from app.schemas.schemas import ReceiptExtractionSchema
 from app.services import receipt_extraction
 from app.services.audit_service import AuditService
+from app.services.claim_service import ClaimService
 from app.services.employee_service import EmployeeService
-from app.services.s3_service import upload_receipt_to_s3
+from app.services.s3_service import (
+    S3DownloadError,
+    download_receipt_from_s3,
+    upload_receipt_to_s3,
+)
 from app.services.textract_service import analyze_receipt_with_textract
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/expense-items", tags=["Expense Items"])
+
+
+#: Content types the viewer is allowed to render inline. Anything else is forced to download:
+#: serving an attacker-supplied ``text/html`` from this origin would be stored XSS with the
+#: caller's session attached.
+_INLINE_CONTENT_TYPES = frozenset(
+    {"application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp"}
+)
+
+
+@router.get("/receipt", status_code=status.HTTP_200_OK)
+def download_receipt(
+    fileUrl: str = Query(..., description="The item's stored fileUrl, echoed back verbatim."),
+    actor: Actor = Depends(get_actor),
+    claims: ClaimRepository = Depends(get_claim_repository),
+    service: ClaimService = Depends(get_claim_service),
+):
+    """Stream a receipt document through the API.
+
+    The S3 bucket is private, so the browser cannot fetch ``fileUrl`` directly. This endpoint is
+    the authorized path to those bytes: it resolves the URL to the expense item that owns it and
+    reuses the claim's own access rule, so a caller only ever reads receipts on claims they can
+    already see.
+
+    ``fileUrl`` is **never** trusted as an S3 key. It is matched against a persisted
+    ``expense_items.file_url``; a URL with no such row is a 404, which is what stops a caller from
+    walking the bucket by editing the query string.
+    """
+    key = receipt_extraction.parse_object_key(fileUrl)
+    if not key:
+        raise HTTPException(status_code=400, detail="A valid fileUrl is required.")
+
+    item = claims.find_item_by_file_url(fileUrl)
+    # 404 rather than 403 for the same reason as get_claim_for_actor: the response must not
+    # confirm that an object exists to someone who cannot read it.
+    if item is None or item.claim is None:
+        raise HTTPException(status_code=404, detail="Receipt not found.")
+
+    # Raises NotFoundError (-> 404) when this actor cannot see the claim.
+    service.get_claim_for_actor(str(item.claim_id), actor=actor)
+
+    try:
+        data, content_type = download_receipt_from_s3(key)
+    except S3DownloadError as e:
+        logger.error("receipt.download_failed", extra={"key": key, "error": str(e)})
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The receipt could not be retrieved from storage.",
+        )
+
+    resolved_type = content_type or item.mime_type or "application/octet-stream"
+    disposition = "inline" if resolved_type in _INLINE_CONTENT_TYPES else "attachment"
+    file_name = (item.file_name or "receipt").replace('"', "")
+
+    return Response(
+        content=data,
+        media_type=resolved_type,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{file_name}"',
+            # The bytes are per-caller and authorization is re-checked on every request; a shared
+            # cache holding them would serve one employee's receipt to the next.
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.post("/upload", status_code=status.HTTP_200_OK, response_model=ReceiptExtractionSchema)

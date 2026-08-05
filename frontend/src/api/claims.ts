@@ -103,6 +103,7 @@ interface ClaimApiShape {
   fromDate: string | null;
   toDate: string | null;
   status: string;
+  totalAmount: number | null;
   items: Array<{
     id: string;
     category: string | null;
@@ -114,6 +115,8 @@ interface ClaimApiShape {
     fileUrl: string | null;
   }>;
   workflowHistory: WorkflowStepLog[];
+  withdrawnAt: string | null;
+  withdrawalReason: string | null;
   [key: string]: unknown;
 }
 
@@ -138,8 +141,13 @@ function mapClaim(raw: ClaimApiShape): Claim {
     fromDate: raw.fromDate ?? "",
     toDate: raw.toDate ?? "",
     status: raw.status as ClaimStatus,
+    // The server maintains this roll-up; summing items is only a fallback for older payloads.
+    totalAmount:
+      raw.totalAmount ?? items.reduce((sum, item) => sum + item.amount, 0),
     items,
     workflowHistory: raw.workflowHistory ?? [],
+    withdrawnAt: raw.withdrawnAt ?? null,
+    withdrawalReason: raw.withdrawalReason ?? null,
   };
 }
 

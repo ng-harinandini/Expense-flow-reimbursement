@@ -201,8 +201,11 @@ export interface Claim {
   fromDate: string;
   toDate: string;
   status: ClaimStatus;
+  totalAmount: number;
   items: ClaimExpenseItem[];
   workflowHistory: WorkflowStepLog[];
+  withdrawnAt?: string | null;
+  withdrawalReason?: string | null;
 }
 
 export interface PolicyRuleDefinition {

@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { yupResolver } from "@hookform/resolvers/yup";
 import { FileText } from "lucide-react";
@@ -26,6 +27,7 @@ import {
 import type { ExpenseItemDraft } from "@/components/submit_expense/helpers";
 
 export default function SubmitExpense() {
+  const router = useRouter();
   const claimForm = useForm<ClaimFormValues>({
     resolver: yupResolver(claimSchema),
     defaultValues: CLAIM_FORM_DEFAULTS,
@@ -38,7 +40,6 @@ export default function SubmitExpense() {
   const [editingItem, setEditingItem] = React.useState<ExpenseItemDraft | null>(null);
   const [raiseClaimError, setRaiseClaimError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
-  const [submittedClaimNumber, setSubmittedClaimNumber] = React.useState<string | null>(null);
 
   const handleAddClick = async () => {
     // Claim fields must be valid before an item can be tied to this claim.
@@ -81,34 +82,24 @@ export default function SubmitExpense() {
 
     try {
       const result = await createClaim(getValues(), items);
-      setSubmittedClaimNumber(result.claimNumber);
+
+      if (!result?.id) {
+        setRaiseClaimError("The claim could not be confirmed. Please try again.");
+        setIsSubmitting(false);
+        return;
+      }
+
       claimForm.reset();
       setItems([]);
+      router.push("/my-claims");
     } catch (error) {
       setRaiseClaimError(getErrorMessage(error, "Failed to submit the claim. Please try again."));
-    } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
     <>
-      {submittedClaimNumber && (
-        <div className="mb-4 flex items-start gap-3 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm text-primary">
-          <FileText className="mt-0.5 size-4 shrink-0" />
-          <span>
-            Claim <span className="font-semibold">{submittedClaimNumber}</span> submitted
-            successfully.{" "}
-            <button
-              type="button"
-              className="underline underline-offset-2 hover:opacity-70"
-              onClick={() => setSubmittedClaimNumber(null)}
-            >
-              Submit another
-            </button>
-          </span>
-        </div>
-      )}
       <Card className="gap-4 py-4">
         {/* CardHeader defaults to a two-row grid (title row / description row)
             for the case where they're separate children. Title and

@@ -24,9 +24,10 @@ import { useClaimsQuery } from "@/api/claims";
 import { getErrorMessage } from "@/lib/apiError";
 import type { Claim, ClaimStatus } from "@/types";
 
-import { buildColumnDefs } from "./columns";
+import { CENTERED_COL_DEF, buildColumnDefs } from "./columns";
 import { STATUS_LABELS } from "./status";
 import { ClaimDetailDialog } from "./ClaimDetailDialog";
+import { useExpandableItems } from "./useExpandableItems";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -42,6 +43,8 @@ const STATUS_OPTIONS: ClaimStatus[] = [
 ];
 
 const ALL_STATUSES = "all-statuses";
+
+const ROW_HEIGHT = 64;
 
 function MyClaims() {
   const router = useRouter();
@@ -82,9 +85,12 @@ function MyClaims() {
       resizable: true,
       sortable: true,
       filter: false,
+      ...CENTERED_COL_DEF,
     }),
     [],
   );
+
+  const expandableProps = useExpandableItems(rowData, columnDefs, ROW_HEIGHT);
 
   return (
     <div className="rounded-xl border bg-card shadow-sm">
@@ -145,15 +151,14 @@ function MyClaims() {
             {getErrorMessage(error, "Failed to load claims.")}
           </div>
         ) : (
-          <AgGridReact<Claim>
+          <AgGridReact
             theme={themeQuartz}
-            rowData={rowData}
-            columnDefs={columnDefs}
+            {...expandableProps}
             defaultColDef={defaultColDef}
             loading={isLoading}
             overlayNoRowsTemplate="No claims found matching your filter criteria."
             domLayout="normal"
-            rowHeight={56}
+            rowHeight={ROW_HEIGHT}
             headerHeight={44}
             suppressCellFocus
           />
