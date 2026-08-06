@@ -84,7 +84,8 @@ export function createClaim(
 // ---------------------------------------------------------------------------
 
 export interface GetClaimsParams {
-  status?: string;
+  /** One status, or several (OR'd) — sent as repeated `?status=` params in a single request. */
+  status?: string | string[];
   employeeId?: string;
   riskLevel?: string;
   limit?: number;
@@ -182,9 +183,17 @@ export function withdrawClaim(
   }).then(mapClaim);
 }
 
+/** Appends one `?status=` param per value — the backend OR's repeated params into one query. */
+function appendStatus(query: URLSearchParams, status: GetClaimsParams["status"]): void {
+  if (!status) return;
+  for (const value of Array.isArray(status) ? status : [status]) {
+    if (value) query.append("status", value);
+  }
+}
+
 export function getClaims(params: GetClaimsParams = {}): Promise<Claim[]> {
   const query = new URLSearchParams();
-  if (params.status) query.set("status", params.status);
+  appendStatus(query, params.status);
   if (params.employeeId) query.set("employeeId", params.employeeId);
   if (params.riskLevel) query.set("riskLevel", params.riskLevel);
   if (params.limit != null) query.set("limit", String(params.limit));
@@ -199,6 +208,86 @@ export function useClaimsQuery(params: GetClaimsParams = {}) {
   return useQuery({
     queryKey: [...CLAIMS_QUERY_KEY, params],
     queryFn: () => getClaims(params),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// GET /claims/team
+// ---------------------------------------------------------------------------
+
+export const TEAM_CLAIMS_QUERY_KEY = ["claims", "team"] as const;
+
+/**
+ * Claims filed by the caller's direct reports (manager-only). Same query params and response
+ * shape as {@link getClaims} — just scoped server-side to the manager's own team.
+ */
+export function getTeamClaims(params: GetClaimsParams = {}): Promise<Claim[]> {
+  const query = new URLSearchParams();
+  appendStatus(query, params.status);
+  if (params.riskLevel) query.set("riskLevel", params.riskLevel);
+  if (params.limit != null) query.set("limit", String(params.limit));
+  if (params.offset != null) query.set("offset", String(params.offset));
+
+  const path = query.toString() ? `/claims/team?${query}` : "/claims/team";
+
+  return apiRequest<ClaimApiShape[]>(path).then((list) => list.map(mapClaim));
+}
+
+export function useTeamClaimsQuery(params: GetClaimsParams = {}) {
+  return useQuery({
+    queryKey: [...TEAM_CLAIMS_QUERY_KEY, params],
+    queryFn: () => getTeamClaims(params),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// POST /claims/{id}/action
+// ---------------------------------------------------------------------------
+
+// "DISBURSE" was retired — Approve is the final reviewer step (see
+// app.domain.claim_state_machine on the backend, which no longer accepts that action at all).
+export type ClaimReviewAction = "APPROVE" | "REJECT" | "FLAG_FRAUD";
+
+export interface ExecuteClaimActionOptions {
+  claimId: string;
+  action: ClaimReviewAction;
+  notes?: string;
+  expectedVersion?: number;
+}
+
+/**
+ * Apply a reviewer decision. The backend derives the target state from the claim's current
+ * status (e.g. APPROVE escalates Manager_Review -> Finance_Review) and 409s with the legal next
+ * states if the action isn't valid from where the claim currently is.
+ */
+export function executeClaimAction({
+  claimId,
+  action,
+  notes,
+  expectedVersion,
+}: ExecuteClaimActionOptions): Promise<Claim> {
+  const body: Record<string, unknown> = { action };
+  if (notes) body.notes = notes;
+  if (expectedVersion != null) body.expectedVersion = expectedVersion;
+
+  return apiRequest<ClaimApiShape>(`/claims/${encodeURIComponent(claimId)}/action`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+  }).then(mapClaim);
+}
+
+export function useExecuteClaimActionMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: executeClaimAction,
+    onSuccess: () => {
+      // The acted-on claim can appear in both the caller's own list and their team list
+      // (e.g. an admin), so both are invalidated rather than guessing which one is stale.
+      queryClient.invalidateQueries({ queryKey: CLAIMS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: TEAM_CLAIMS_QUERY_KEY });
+    },
   });
 }
 

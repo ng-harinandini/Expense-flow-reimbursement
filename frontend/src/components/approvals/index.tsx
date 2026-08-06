@@ -13,11 +13,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { INITIAL_MULTI_ITEM_CLAIMS } from "@/data/claims";
-import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
+import { useExecuteClaimActionMutation, useTeamClaimsQuery } from "@/api/claims";
+import { getErrorMessage } from "@/lib/apiError";
+import { useToast } from "@/components/ui/toast";
 import { STATUS_LABELS } from "@/components/my_claims/status";
 import { CENTERED_COL_DEF } from "@/components/my_claims/columns";
-import type { Claim, ClaimStatus, WorkflowStepLog } from "@/types";
+import type { Claim, ClaimStatus } from "@/types";
 
 import { useExpandableItems } from "@/components/my_claims/useExpandableItems";
 
@@ -34,62 +35,69 @@ const STATUS_OPTIONS: ClaimStatus[] = [
   "Finance_Review",
   "Flagged_Fraud",
   "Approved",
-  "Disbursed",
 ];
 
 const ALL_STATUSES = "all-statuses";
 
 function Approvals() {
-  const [claims, setClaims] = React.useState<Claim[]>(INITIAL_MULTI_ITEM_CLAIMS);
+  const toast = useToast();
   const [search, setSearch] = React.useState("");
   const [status, setStatus] = React.useState<string>(ALL_STATUSES);
   const [selectedClaim, setSelectedClaim] = React.useState<Claim | null>(null);
   const [isDetailOpen, setIsDetailOpen] = React.useState(false);
+  const { data: allClaims = [], isLoading, error } = useTeamClaimsQuery();
+  const actionMutation = useExecuteClaimActionMutation();
 
   const handleView = React.useCallback((claim: Claim) => {
     setSelectedClaim(claim);
     setIsDetailOpen(true);
   }, []);
 
-  // TODO: replace with PATCH /api/claims/:id/status once the endpoint exists.
-  const applyDecision = React.useCallback(
-    (claim: Claim, nextStatus: ClaimStatus, action: string, notes?: string) => {
-      const manager = INITIAL_EMPLOYEES.find((e) => e.id === claim.employeeId)?.managerName;
-      const entry: WorkflowStepLog = {
-        timestamp: new Date().toISOString(),
-        actorName: manager ?? "Manager",
-        actorRole: "manager",
-        stepName: "Manager Review",
-        action,
-        status: nextStatus === "Rejected" ? "FAILED" : nextStatus === "Draft" ? "WARNING" : "SUCCESS",
-        notes,
-      };
-
-      setClaims((current) =>
-        current.map((c) =>
-          c.id === claim.id
-            ? { ...c, status: nextStatus, workflowHistory: [...c.workflowHistory, entry] }
-            : c
-        )
-      );
-    },
-    []
-  );
-
   const handleApprove = React.useCallback(
-    (claim: Claim) => applyDecision(claim, "Finance_Review", "Approved claim, sent to finance"),
-    [applyDecision]
+    async (claim: Claim) => {
+      try {
+        await actionMutation.mutateAsync({ claimId: claim.id, action: "APPROVE" });
+        toast({ message: `${claim.claimNumber} approved.`, type: "success" });
+      } catch (err) {
+        toast({
+          message: getErrorMessage(err, "Failed to approve this claim."),
+          type: "error",
+        });
+      }
+    },
+    [actionMutation, toast]
   );
 
   const handleReject = React.useCallback(
-    (claim: Claim, reason: string) => applyDecision(claim, "Rejected", "Rejected claim", reason),
-    [applyDecision]
+    async (claim: Claim, reason: string) => {
+      try {
+        await actionMutation.mutateAsync({
+          claimId: claim.id,
+          action: "REJECT",
+          notes: reason,
+        });
+        toast({ message: `${claim.claimNumber} rejected.`, type: "success" });
+      } catch (err) {
+        toast({
+          message: getErrorMessage(err, "Failed to reject this claim."),
+          type: "error",
+        });
+      }
+    },
+    [actionMutation, toast]
   );
 
+  // TODO: no backend transition exists yet for handing a claim back to the employee for edits
+  // (the state machine has no route back to Draft from a review state) — wire this up once that
+  // lands. For now it's a no-op so the button stays visible without pretending to do something.
   const handleSendBack = React.useCallback(
-    (claim: Claim, reason: string) =>
-      applyDecision(claim, "Draft", "Sent back to employee for changes", reason),
-    [applyDecision]
+    (_claim: Claim, _reason: string) => {
+      toast({
+        message: "Sending a claim back to the employee isn't available yet.",
+        type: "info",
+      });
+    },
+    [toast]
   );
 
   const columnDefs = React.useMemo<ColDef<Claim>[]>(
@@ -100,7 +108,7 @@ function Approvals() {
   const rowData = React.useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return claims.filter((claim) => {
+    return allClaims.filter((claim) => {
       const matchesSearch =
         !query ||
         claim.claimNumber.toLowerCase().includes(query) ||
@@ -111,7 +119,7 @@ function Approvals() {
 
       return matchesSearch && matchesStatus;
     });
-  }, [claims, search, status]);
+  }, [allClaims, search, status]);
 
   const defaultColDef = React.useMemo<ColDef>(
     () => ({
@@ -170,15 +178,22 @@ function Approvals() {
       </div>
 
       <div className="h-[560px] px-6 pb-6">
-        <DataGrid
-          {...expandableProps}
-          defaultColDef={defaultColDef}
-          overlayNoRowsTemplate="No claims found matching your filter criteria."
-          domLayout="normal"
-          rowHeight={ROW_HEIGHT}
-          headerHeight={44}
-          suppressCellFocus
-        />
+        {error ? (
+          <div className="flex h-full items-center justify-center text-sm text-destructive">
+            {getErrorMessage(error, "Failed to load claims.")}
+          </div>
+        ) : (
+          <DataGrid
+            {...expandableProps}
+            defaultColDef={defaultColDef}
+            loading={isLoading}
+            overlayNoRowsTemplate="No claims found matching your filter criteria."
+            domLayout="normal"
+            rowHeight={ROW_HEIGHT}
+            headerHeight={44}
+            suppressCellFocus
+          />
+        )}
       </div>
 
       <ClaimReviewDialog

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Iterator, Optional
 
@@ -430,13 +430,19 @@ def make_claim(db_session: Session, employee: Employee):
             (ClaimStatus.PROCESSING, "system"),
             (ClaimStatus.FLAGGED_FRAUD, "system"),
         ],
+        # No transition edge reaches REIMBURSED any more — Approve is the last reviewer action
+        # (see app.domain.claim_state_machine). A REIMBURSED-status fixture still has to exist for
+        # tests covering how the app reads/classifies a historical row that was paid out before
+        # that change, so `_make` builds up to APPROVED normally (this route ends there
+        # deliberately, one hop short), then bypasses the guard for one write to land on
+        # REIMBURSED directly — the same way a pre-existing production row would already be
+        # sitting in that status without ever having passed through today's transition table.
         ClaimStatus.REIMBURSED: [
             (ClaimStatus.SUBMITTED, "employee"),
             (ClaimStatus.PROCESSING, "system"),
             (ClaimStatus.MANAGER_REVIEW, "system"),
             (ClaimStatus.FINANCE_REVIEW, "manager"),
             (ClaimStatus.APPROVED, "finance"),
-            (ClaimStatus.REIMBURSED, "finance"),
         ],
     }
 
@@ -509,6 +515,17 @@ def make_claim(db_session: Session, employee: Employee):
             repository.transition_status(
                 claim, target, actor_role=role, actor_sub=f"sub-{role}", actor_name=role,
             )
+
+        if status is ClaimStatus.REIMBURSED:
+            # No transition edge reaches REIMBURSED any more (see the `routes` comment above) —
+            # the guard trigger would reject a normal UPDATE, so it is disabled for this one
+            # write, exactly as migration 0010's downgrade does for its own historical rewrite.
+            db_session.execute(text("ALTER TABLE claims DISABLE TRIGGER claims_status_transition_guard"))
+            claim.status = ClaimStatus.REIMBURSED
+            claim.reimbursed_at = datetime.now(timezone.utc)
+            db_session.flush()
+            db_session.execute(text("ALTER TABLE claims ENABLE TRIGGER claims_status_transition_guard"))
+
         return claim
 
     return _make

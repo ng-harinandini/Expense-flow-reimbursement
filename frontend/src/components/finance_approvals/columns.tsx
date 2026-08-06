@@ -4,12 +4,32 @@ import type { Claim } from "@/types";
 import {
   ClaimTitleCell,
   ItemCountCell,
-  formatCurrency,
+  StatusBadge,
 } from "@/components/my_claims/columns";
-import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
 
-export function managerNameFor(claim: Claim) {
-  return INITIAL_EMPLOYEES.find((e) => e.id === claim.employeeId)?.managerName ?? "—";
+
+export function managerNameFor(claim: Claim): string {
+  const step = claim.workflowHistory.find((entry) => entry.stepName === "Manager Approval");
+  return step?.actorName ?? "—";
+}
+
+/**
+ * Whether *finance* (not the manager) was the one who rejected this claim. ``Rejected`` is one
+ * shared terminal status regardless of which reviewer closed it, so the acting role has to be read
+ * off the last "Approval Decision" history entry rather than the status alone (see
+ * ``ClaimRepository.reject_claim``, which logs every rejection under that same step name).
+ */
+export function isFinanceRejected(claim: Claim): boolean {
+  if (claim.status !== "Rejected") return false;
+  const decisions = claim.workflowHistory.filter(
+    (entry) => entry.stepName === "Approval Decision" && entry.action.startsWith("Rejected claim")
+  );
+  return decisions[decisions.length - 1]?.actorRole === "finance";
+}
+
+/** Finance can no longer act once the claim has left ``Finance_Review`` (paid out or rejected). */
+export function isFinanceActionable(claim: Claim): boolean {
+  return claim.status === "Finance_Review";
 }
 
 export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[] {
@@ -62,6 +82,14 @@ export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[]
       //   formatCurrency(params.value as number, params.data?.currency),
     },
     {
+      headerName: "Claim Status",
+      field: "status",
+      flex: 1.1,
+      minWidth: 150,
+      cellRenderer: (params: ICellRendererParams<Claim>) =>
+        params.data ? <StatusBadge status={params.data.status} /> : null,
+    },
+    {
       headerName: "Action",
       colId: "action",
       flex: 0.9,
@@ -74,7 +102,7 @@ export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[]
           className="text-sm font-medium text-secondary hover:underline"
           onClick={() => params.data && onView(params.data)}
         >
-          View Details
+          {params.data && isFinanceActionable(params.data) ? "Take Action" : "View Details"}
         </button>
       ),
     },

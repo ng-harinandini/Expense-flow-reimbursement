@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Check, ExternalLink, X } from "lucide-react";
+import { Check, X } from "lucide-react";
 
 import {
   Dialog,
@@ -18,14 +18,17 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/textarea";
+import { ReceiptViewer } from "@/components/ReceiptViewer";
 import type { Claim } from "@/types";
 import {
+  ItemStatusBadge,
+  StatusBadge,
   formatCurrency,
   formatDate,
-  StatusBadge,
 } from "@/components/my_claims/columns";
+import { ClaimStatusStepper } from "@/components/my_claims/ClaimStatusStepper";
 
-import { managerNameFor } from "./columns";
+import { isFinanceActionable, managerNameFor } from "./columns";
 
 type PendingAction = "reject" | null;
 
@@ -33,8 +36,8 @@ interface FinanceReviewDialogProps {
   claim: Claim | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onApprove: (claim: Claim) => void;
-  onReject: (claim: Claim, reason: string) => void;
+  onApprove: (claim: Claim) => void | Promise<void>;
+  onReject: (claim: Claim, reason: string) => void | Promise<void>;
 }
 
 export function FinanceReviewDialog({
@@ -47,6 +50,7 @@ export function FinanceReviewDialog({
   const [selectedItemId, setSelectedItemId] = React.useState<string>("");
   const [pendingAction, setPendingAction] = React.useState<PendingAction>(null);
   const [reason, setReason] = React.useState("");
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   // Reset to the first expense item and clear any in-progress reason whenever
   // a (new) claim is opened.
@@ -56,152 +60,146 @@ export function FinanceReviewDialog({
     }
     setPendingAction(null);
     setReason("");
+    setIsSubmitting(false);
   }, [open, claim]);
 
   if (!claim) return null;
 
-  const totalAmount = claim.totalAmount;
   const manager = managerNameFor(claim);
   const selectedItem =
     claim.items.find((item) => item.id === selectedItemId) ?? claim.items[0];
+  const actionable = isFinanceActionable(claim);
+  const actionsDisabled = isSubmitting || !actionable;
 
-  const handleApprove = () => {
-    onApprove(claim);
-    onOpenChange(false);
+  const handleApprove = async () => {
+    setIsSubmitting(true);
+    try {
+      await onApprove(claim);
+      onOpenChange(false);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleConfirmReject = () => {
+  const handleConfirmReject = async () => {
     if (!reason.trim()) return;
-    onReject(claim, reason.trim());
-    onOpenChange(false);
+    setIsSubmitting(true);
+    try {
+      await onReject(claim, reason.trim());
+      onOpenChange(false);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+      <DialogContent className="max-h-[90vh] max-w-[calc(100%-10rem)] overflow-y-auto sm:max-w-[70rem]">
         <DialogHeader className="pr-8">
-          <DialogTitle className="text-xl">{claim.employeeName}</DialogTitle>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <DialogTitle className="text-xl">{claim.employeeName}</DialogTitle>
+            <StatusBadge status={claim.status} />
+          </div>
           <p className="text-sm text-muted-foreground">
-            {claim.claimTitle} · {claim.claimNumber} · {formatCurrency(totalAmount)}
+            {claim.claimTitle} · {claim.claimNumber} ·{" "}
+            {formatCurrency(claim.totalAmount)}
           </p>
         </DialogHeader>
 
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-          <div className="flex flex-col gap-3">
-            {claim.items.length > 1 && (
-              <Select value={selectedItem?.id} onValueChange={setSelectedItemId}>
-                <SelectTrigger className="h-9 text-foreground">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {claim.items.map((item, index) => (
-                    <SelectItem key={item.id} value={item.id}>
-                      Expense Item {index + 1} — {item.merchantVendor}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[auto_22rem_1fr]">
+          {/* Column 1 — progress stepper */}
+          <ClaimStatusStepper claim={claim} manager={manager} className="lg:border-r lg:pr-6" />
 
-            {selectedItem && (
-              <div className="relative">
-                <img
-                  src={selectedItem.receiptUrl}
-                  alt={`Receipt for ${selectedItem.merchantVendor}`}
-                  className="h-72 w-full rounded-lg border object-cover"
-                />
-                <a
-                  href={selectedItem.receiptUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="absolute top-2 right-2 inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-xs font-medium text-secondary-foreground shadow-xs hover:bg-secondary/90"
-                >
-                  <ExternalLink className="size-3.5" />
-                  Open
-                </a>
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border bg-muted/30 p-3">
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Claim period
-                </p>
-                <p className="text-sm font-medium text-foreground">
-                  {formatDate(claim.fromDate)} – {formatDate(claim.toDate)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Status
-                </p>
-                <StatusBadge status={claim.status} />
-              </div>
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Total amount
-                </p>
-                <p className="text-sm font-semibold text-foreground">
-                  {formatCurrency(totalAmount)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Expense items
-                </p>
-                <p className="text-sm font-medium text-foreground">{claim.items.length}</p>
-              </div>
-              <div className="col-span-2">
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Approved by (Manager)
-                </p>
-                <p className="text-sm font-medium text-foreground">{manager}</p>
-              </div>
+          {/* Column 2 — selected expense item */}
+          <div className="flex flex-col gap-4 lg:border-r lg:pr-6">
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Approved by (Manager)
+              </p>
+              <p className="text-sm font-medium text-foreground">{manager}</p>
             </div>
 
             {selectedItem && (
-              <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                <div>
+              <>
+                <div className="space-y-1.5">
                   <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Category
+                    Expense item
                   </p>
-                  <p className="text-sm font-medium text-foreground">{selectedItem.category}</p>
+                  <Select value={selectedItem.id} onValueChange={setSelectedItemId}>
+                    <SelectTrigger className="h-9 w-full text-foreground">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {claim.items.map((item, index) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          Expense Item {index + 1} — {item.merchantVendor}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div>
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Date
-                  </p>
-                  <p className="text-sm font-medium text-foreground">
-                    {formatDate(selectedItem.expenseDate)}
-                  </p>
+
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Category
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-medium text-foreground">
+                        {selectedItem.category}
+                      </p>
+                      <ItemStatusBadge status={selectedItem.status} className="text-[10px]" />
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Date
+                    </p>
+                    <p className="text-sm font-medium text-foreground">
+                      {formatDate(selectedItem.expenseDate)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Vendor
+                    </p>
+                    <p className="text-sm font-medium text-foreground">
+                      {selectedItem.merchantVendor}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Amount
+                    </p>
+                    <p className="text-sm font-semibold text-foreground">
+                      {formatCurrency(selectedItem.amount, selectedItem.currency)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Description
+                    </p>
+                    <p className="text-sm text-foreground">{selectedItem.description}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Vendor
-                  </p>
-                  <p className="text-sm font-medium text-foreground">
-                    {selectedItem.merchantVendor}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Amount
-                  </p>
-                  <p className="text-sm font-semibold text-foreground">
-                    {formatCurrency(selectedItem.amount, selectedItem.currency)}
-                  </p>
-                </div>
-                <div className="col-span-2">
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Description
-                  </p>
-                  <p className="text-sm text-foreground">{selectedItem.description}</p>
-                </div>
-              </div>
+              </>
             )}
           </div>
+
+          {/* Column 3 — receipt */}
+          {selectedItem && (
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Receipt
+              </p>
+              <ReceiptViewer
+                key={selectedItem.id}
+                fileUrl={selectedItem.receiptUrl}
+                alt={`Receipt for ${selectedItem.merchantVendor}`}
+                className="h-[60vh]"
+              />
+            </div>
+          )}
         </div>
 
         <div className="mt-2 border-t pt-4">
@@ -217,11 +215,13 @@ export function FinanceReviewDialog({
                   onChange={(e) => setReason(e.target.value)}
                   placeholder="Explain why this claim is being rejected..."
                   className="mt-1.5 text-foreground"
+                  disabled={isSubmitting}
                 />
               </div>
               <div className="flex justify-end gap-2">
                 <Button
                   variant="outline"
+                  disabled={isSubmitting}
                   onClick={() => {
                     setPendingAction(null);
                     setReason("");
@@ -231,26 +231,34 @@ export function FinanceReviewDialog({
                 </Button>
                 <Button
                   variant="destructive"
-                  disabled={!reason.trim()}
+                  disabled={!reason.trim() || isSubmitting}
                   onClick={handleConfirmReject}
                 >
-                  Confirm rejection
+                  {isSubmitting ? "Submitting..." : "Confirm rejection"}
                 </Button>
               </div>
             </div>
           ) : (
-            <div className="flex flex-wrap justify-end gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {!actionable && (
+                <p className="mr-auto text-sm text-muted-foreground">
+                  {claim.status === "Approved" || claim.status === "Disbursed"
+                    ? "This claim has already been approved — no further action is possible."
+                    : "This claim is closed — no further action is possible."}
+                </p>
+              )}
               <Button
                 variant="outline"
                 className="text-destructive hover:text-destructive"
+                disabled={actionsDisabled}
                 onClick={() => setPendingAction("reject")}
               >
                 <X />
                 Reject
               </Button>
-              <Button onClick={handleApprove}>
+              <Button disabled={actionsDisabled} onClick={handleApprove}>
                 <Check />
-                Approve
+                {isSubmitting ? "Submitting..." : "Approve"}
               </Button>
             </div>
           )}

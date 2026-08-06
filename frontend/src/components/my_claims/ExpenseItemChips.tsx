@@ -49,10 +49,10 @@ function getStatusReason(claim: Claim): string {
     Processing_AI: `${itemLabel} totalling ${total} are being scanned for receipt data and policy compliance.`,
     Auto_Approved: `${itemLabel} totalling ${total} passed policy checks within auto-approval limits, so no manual review was needed.`,
     Manager_Review: `${itemLabel} totalling ${total} need manager sign-off before this moves to finance.`,
-    Finance_Review: `The manager approved ${itemLabel} totalling ${total}; finance is verifying before disbursement.`,
-    Approved: `${itemLabel} totalling ${total} cleared review and are approved for disbursement.`,
+    Finance_Review: `The manager approved ${itemLabel} totalling ${total}; finance is giving it a final review.`,
+    Approved: `${itemLabel} totalling ${total} cleared review and are approved.`,
     Rejected: `${itemLabel} totalling ${total} were reviewed and rejected — see the claim's comments for details.`,
-    Disbursed: `Payment for ${itemLabel} totalling ${total} has been issued.`,
+    Disbursed: `${itemLabel} totalling ${total} were approved and paid out.`,
     Flagged_Fraud: `${itemLabel} totalling ${total} were flagged during fraud screening and are under investigation.`,
     Withdrawn: `This claim was withdrawn, so ${itemLabel} totalling ${total} are no longer under review.`,
   };

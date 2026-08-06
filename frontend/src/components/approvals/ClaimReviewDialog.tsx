@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Check, ExternalLink, RotateCcw, X } from "lucide-react";
+import { Check, RotateCcw, X } from "lucide-react";
 
 import {
   Dialog,
@@ -18,12 +18,16 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/textarea";
+import { ReceiptViewer } from "@/components/ReceiptViewer";
 import type { Claim } from "@/types";
 import {
+  ItemStatusBadge,
+  StatusBadge,
   formatCurrency,
   formatDate,
-  StatusBadge,
+  formatDateTime,
 } from "@/components/my_claims/columns";
+import { ClaimStatusStepper } from "@/components/my_claims/ClaimStatusStepper";
 
 type PendingAction = "reject" | "send_back" | null;
 
@@ -44,9 +48,9 @@ interface ClaimReviewDialogProps {
   claim: Claim | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onApprove: (claim: Claim) => void;
-  onReject: (claim: Claim, reason: string) => void;
-  onSendBack: (claim: Claim, reason: string) => void;
+  onApprove: (claim: Claim) => void | Promise<void>;
+  onReject: (claim: Claim, reason: string) => void | Promise<void>;
+  onSendBack: (claim: Claim, reason: string) => void | Promise<void>;
 }
 
 export function ClaimReviewDialog({
@@ -60,6 +64,7 @@ export function ClaimReviewDialog({
   const [selectedItemId, setSelectedItemId] = React.useState<string>("");
   const [pendingAction, setPendingAction] = React.useState<PendingAction>(null);
   const [reason, setReason] = React.useState("");
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   // Reset to the first expense item and clear any in-progress reason whenever
   // a (new) claim is opened.
@@ -69,146 +74,161 @@ export function ClaimReviewDialog({
     }
     setPendingAction(null);
     setReason("");
+    setIsSubmitting(false);
   }, [open, claim]);
 
   if (!claim) return null;
 
-  const totalAmount = claim.totalAmount;
   const selectedItem =
     claim.items.find((item) => item.id === selectedItemId) ?? claim.items[0];
+  const isWithdrawn = claim.status === "Withdrawn";
+  const actionsDisabled = isSubmitting || isWithdrawn;
 
-  const handleApprove = () => {
-    onApprove(claim);
-    onOpenChange(false);
+  const handleApprove = async () => {
+    setIsSubmitting(true);
+    try {
+      await onApprove(claim);
+      onOpenChange(false);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleConfirmReason = () => {
+  const handleConfirmReason = async () => {
     if (!pendingAction || !reason.trim()) return;
-    if (pendingAction === "reject") onReject(claim, reason.trim());
-    if (pendingAction === "send_back") onSendBack(claim, reason.trim());
-    onOpenChange(false);
+    setIsSubmitting(true);
+    try {
+      if (pendingAction === "reject") await onReject(claim, reason.trim());
+      if (pendingAction === "send_back") await onSendBack(claim, reason.trim());
+      onOpenChange(false);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+      {/* The base DialogContent caps width at calc(100%-2rem); both that and the sm: breakpoint
+          value have to be raised or the wider three-column layout has nowhere to go. */}
+      <DialogContent className="max-h-[90vh] max-w-[calc(100%-10rem)] overflow-y-auto sm:max-w-[70rem]">
         <DialogHeader className="pr-8">
-          <DialogTitle className="text-xl">{claim.employeeName}</DialogTitle>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <DialogTitle className="text-xl">{claim.employeeName}</DialogTitle>
+            <StatusBadge status={claim.status} />
+          </div>
           <p className="text-sm text-muted-foreground">
-            {claim.claimTitle} · {claim.claimNumber} · {formatCurrency(totalAmount)}
+            {claim.claimTitle} · {claim.claimNumber} ·{" "}
+            {formatCurrency(claim.totalAmount)}
           </p>
         </DialogHeader>
 
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-          <div className="flex flex-col gap-3">
-            {claim.items.length > 1 && (
-              <Select value={selectedItem?.id} onValueChange={setSelectedItemId}>
-                <SelectTrigger className="h-9 text-foreground">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {claim.items.map((item, index) => (
-                    <SelectItem key={item.id} value={item.id}>
-                      Expense Item {index + 1} — {item.merchantVendor}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[auto_22rem_1fr]">
+          {/* Column 1 — progress stepper */}
+          <ClaimStatusStepper claim={claim} className="lg:border-r lg:pr-6" />
+
+          {/* Column 2 — selected expense item */}
+          <div className="flex flex-col gap-4 lg:border-r lg:pr-6">
+            {selectedItem && (
+              <>
+                <div className="space-y-1.5">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Expense item
+                  </p>
+                  <Select value={selectedItem.id} onValueChange={setSelectedItemId}>
+                    <SelectTrigger className="h-9 w-full text-foreground">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {claim.items.map((item, index) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          Expense Item {index + 1} — {item.merchantVendor}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Category
+                    </p>
+                    {/* The item's own status, not the claim's — one item can be on a policy hold
+                        while a sibling is what pushed the whole claim into fraud review. */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-medium text-foreground">
+                        {selectedItem.category}
+                      </p>
+                      <ItemStatusBadge status={selectedItem.status} className="text-[10px]" />
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Date
+                    </p>
+                    <p className="text-sm font-medium text-foreground">
+                      {formatDate(selectedItem.expenseDate)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Vendor
+                    </p>
+                    <p className="text-sm font-medium text-foreground">
+                      {selectedItem.merchantVendor}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Amount
+                    </p>
+                    <p className="text-sm font-semibold text-foreground">
+                      {formatCurrency(selectedItem.amount, selectedItem.currency)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Description
+                    </p>
+                    <p className="text-sm text-foreground">{selectedItem.description}</p>
+                  </div>
+                </div>
+              </>
             )}
 
-            {selectedItem && (
-              <div className="relative">
-                <img
-                  src={selectedItem.receiptUrl}
-                  alt={`Receipt for ${selectedItem.merchantVendor}`}
-                  className="h-72 w-full rounded-lg border object-cover"
-                />
-                <a
-                  href={selectedItem.receiptUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="absolute top-2 right-2 inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-xs font-medium text-secondary-foreground shadow-xs hover:bg-secondary/90"
-                >
-                  <ExternalLink className="size-3.5" />
-                  Open
-                </a>
+            {isWithdrawn && (
+              <div className="mt-auto rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Withdrawn on
+                </p>
+                <p className="mt-1 text-sm font-medium text-foreground">
+                  {claim.withdrawnAt ? formatDateTime(claim.withdrawnAt) : "—"}
+                </p>
+
+                <p className="mt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Withdrawal reason
+                </p>
+                <p className="mt-1 text-sm text-foreground">
+                  {claim.withdrawalReason?.trim() || "No reason was recorded."}
+                </p>
               </div>
             )}
           </div>
 
-          <div className="flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border bg-muted/30 p-3">
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Claim period
-                </p>
-                <p className="text-sm font-medium text-foreground">
-                  {formatDate(claim.fromDate)} – {formatDate(claim.toDate)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Status
-                </p>
-                <StatusBadge status={claim.status} />
-              </div>
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Total amount
-                </p>
-                <p className="text-sm font-semibold text-foreground">
-                  {formatCurrency(totalAmount)}
-                </p>
-              </div>
-              <div>
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Expense items
-                </p>
-                <p className="text-sm font-medium text-foreground">{claim.items.length}</p>
-              </div>
+          {/* Column 3 — receipt */}
+          {selectedItem && (
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Receipt
+              </p>
+              <ReceiptViewer
+                key={selectedItem.id}
+                fileUrl={selectedItem.receiptUrl}
+                alt={`Receipt for ${selectedItem.merchantVendor}`}
+                className="h-[60vh]"
+              />
             </div>
-
-            {selectedItem && (
-              <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                <div>
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Category
-                  </p>
-                  <p className="text-sm font-medium text-foreground">{selectedItem.category}</p>
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Date
-                  </p>
-                  <p className="text-sm font-medium text-foreground">
-                    {formatDate(selectedItem.expenseDate)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Vendor
-                  </p>
-                  <p className="text-sm font-medium text-foreground">
-                    {selectedItem.merchantVendor}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Amount
-                  </p>
-                  <p className="text-sm font-semibold text-foreground">
-                    {formatCurrency(selectedItem.amount, selectedItem.currency)}
-                  </p>
-                </div>
-                <div className="col-span-2">
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Description
-                  </p>
-                  <p className="text-sm text-foreground">{selectedItem.description}</p>
-                </div>
-              </div>
-            )}
-          </div>
+          )}
         </div>
 
         <div className="mt-2 border-t pt-4">
@@ -224,11 +244,13 @@ export function ClaimReviewDialog({
                   onChange={(e) => setReason(e.target.value)}
                   placeholder={REASON_COPY[pendingAction].placeholder}
                   className="mt-1.5 text-foreground"
+                  disabled={isSubmitting}
                 />
               </div>
               <div className="flex justify-end gap-2">
                 <Button
                   variant="outline"
+                  disabled={isSubmitting}
                   onClick={() => {
                     setPendingAction(null);
                     setReason("");
@@ -238,30 +260,40 @@ export function ClaimReviewDialog({
                 </Button>
                 <Button
                   variant="destructive"
-                  disabled={!reason.trim()}
+                  disabled={!reason.trim() || isSubmitting}
                   onClick={handleConfirmReason}
                 >
-                  {REASON_COPY[pendingAction].confirmLabel}
+                  {isSubmitting ? "Submitting..." : REASON_COPY[pendingAction].confirmLabel}
                 </Button>
               </div>
             </div>
           ) : (
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button variant="outline" onClick={() => setPendingAction("send_back")}>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {isWithdrawn && (
+                <p className="mr-auto text-sm text-muted-foreground">
+                  No further action is possible on a withdrawn claim.
+                </p>
+              )}
+              <Button
+                variant="outline"
+                disabled={actionsDisabled}
+                onClick={() => setPendingAction("send_back")}
+              >
                 <RotateCcw />
                 Send to Employee
               </Button>
               <Button
                 variant="outline"
                 className="text-destructive hover:text-destructive"
+                disabled={actionsDisabled}
                 onClick={() => setPendingAction("reject")}
               >
                 <X />
                 Reject
               </Button>
-              <Button onClick={handleApprove}>
+              <Button disabled={actionsDisabled} onClick={handleApprove}>
                 <Check />
-                Approve
+                {isSubmitting ? "Submitting..." : "Approve"}
               </Button>
             </div>
           )}

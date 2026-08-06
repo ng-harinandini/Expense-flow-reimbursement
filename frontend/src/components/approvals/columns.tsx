@@ -4,7 +4,7 @@ import type { Claim } from "@/types";
 import {
   ClaimTitleCell,
   ItemCountCell,
-  formatCurrency,
+  StatusBadge,
 } from "@/components/my_claims/columns";
 
 export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[] {
@@ -47,6 +47,14 @@ export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[]
       cellClass: "font-semibold",
     },
     {
+      headerName: "Claim Status",
+      field: "status",
+      flex: 1.1,
+      minWidth: 150,
+      cellRenderer: (params: ICellRendererParams<Claim>) =>
+        params.data ? <StatusBadge status={params.data.status} /> : null,
+    },
+    {
       headerName: "Action",
       colId: "action",
       flex: 0.9,
@@ -59,7 +67,7 @@ export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[]
           className="text-sm font-medium text-secondary hover:underline"
           onClick={() => params.data && onView(params.data)}
         >
-          View Details
+          {params.data?.status === "Withdrawn" ? "View Details" : "Take Action"}
         </button>
       ),
     },

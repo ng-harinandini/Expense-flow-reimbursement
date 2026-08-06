@@ -290,8 +290,8 @@ class ActionRequestSchema(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     action: str = Field(
-        pattern="^(APPROVE|REJECT|DISBURSE|FLAG_FRAUD)$",
-        description="APPROVE, REJECT, DISBURSE, or FLAG_FRAUD.",
+        pattern="^(APPROVE|REJECT|FLAG_FRAUD)$",
+        description="APPROVE, REJECT, or FLAG_FRAUD.",
     )
     actorName: Optional[str] = Field(default=None, deprecated="Ignored — taken from the token.")
     actorRole: Optional[str] = Field(default=None, deprecated="Ignored — taken from the token.")

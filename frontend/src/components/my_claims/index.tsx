@@ -31,7 +31,6 @@ const STATUS_OPTIONS: ClaimStatus[] = [
   "Finance_Review",
   "Flagged_Fraud",
   "Approved",
-  "Disbursed",
   "Withdrawn",
 ];
 

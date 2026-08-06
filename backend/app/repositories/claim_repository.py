@@ -56,8 +56,10 @@ class ClaimQuery:
     """Filter set for claim listing. All fields optional; ``None`` means "no filter"."""
 
     employee_id: Optional[uuid.UUID] = None
+    employee_ids: Optional[Sequence[uuid.UUID]] = None
     category: Optional[str] = None
     status: Optional[ClaimStatus] = None
+    statuses: Optional[Sequence[ClaimStatus]] = None
     risk_level: Optional[FraudRiskLevel] = None
     assigned_reviewer_id: Optional[uuid.UUID] = None
     expense_date_from: Optional[date] = None
@@ -126,6 +128,8 @@ class ClaimRepository(BaseRepository[Claim]):
 
         if query.employee_id is not None:
             stmt = stmt.where(Claim.employee_id == query.employee_id)
+        if query.employee_ids is not None:
+            stmt = stmt.where(Claim.employee_id.in_(query.employee_ids))
         # The expense filters moved down to the items, so they become "contains an item that…"
         # rather than a property of the claim itself. The public filter names are unchanged.
         if query.category:
@@ -139,6 +143,8 @@ class ClaimRepository(BaseRepository[Claim]):
             )
         if query.status is not None:
             stmt = stmt.where(Claim.status == query.status)
+        if query.statuses is not None:
+            stmt = stmt.where(Claim.status.in_(query.statuses))
         if query.assigned_reviewer_id is not None:
             stmt = stmt.where(Claim.assigned_reviewer_id == query.assigned_reviewer_id)
         if query.expense_date_from is not None:
@@ -500,29 +506,6 @@ class ClaimRepository(BaseRepository[Claim]):
             action=f"Rejected claim {claim.claim_number}",
             notes=reason,
             outcome="WARNING",
-        )
-
-    def mark_reimbursed(
-        self,
-        claim: Claim,
-        *,
-        actor_role: str,
-        actor_sub: Optional[str] = None,
-        actor_name: Optional[str] = None,
-        reference: Optional[str] = None,
-        notes: Optional[str] = None,
-    ) -> Claim:
-        """Record disbursement (``-> Disbursed``/Reimbursed, terminal)."""
-        claim.reimbursement_reference = reference or claim.reimbursement_reference
-        return self.transition_status(
-            claim,
-            ClaimStatus.REIMBURSED,
-            actor_role=actor_role,
-            actor_sub=actor_sub,
-            actor_name=actor_name,
-            step_name="Reimbursement",
-            action=f"Reimbursed claim {claim.claim_number}",
-            notes=notes,
         )
 
     def withdraw_claim(

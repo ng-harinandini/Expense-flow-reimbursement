@@ -22,7 +22,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Optional, Protocol, Sequence, Union, runtime_checkable
 
 from app.ai.core.enums import DecisionMemoryKind
 from app.core.logging import get_logger
@@ -41,7 +41,6 @@ from app.models.category import ExpenseCategory
 from app.models.claim import Claim
 from app.models.enums import (
     ApprovalStepStatus,
-    AttachmentKind,
     AuditAction,
     AuditEntity,
     ClaimStatus,
@@ -69,11 +68,7 @@ FRAUD_ROUTING_THRESHOLD = 40
 #: Categories whose claims require an attendee listing.
 ATTENDEE_REQUIRED_CATEGORIES = frozenset({"Client Entertainment"})
 
-#: The four actions the existing API exposes on ``POST /claims/{id}/action``.
-CLAIM_ACTIONS = frozenset({"APPROVE", "REJECT", "DISBURSE", "FLAG_FRAUD"})
-
-#: Only these roles may move money.
-DISBURSE_ROLES = frozenset({"finance", "admin"})
+CLAIM_ACTIONS = frozenset({"APPROVE", "REJECT", "FLAG_FRAUD"})
 
 #: How many peer claims to compare against during fraud screening.
 FRAUD_CORPUS_LIMIT = 200
@@ -222,7 +217,7 @@ class ClaimService:
         *,
         actor: Actor,
         category: Optional[str] = None,
-        status: Optional[str] = None,
+        status: Union[str, Sequence[str], None] = None,
         employee_code: Optional[str] = None,
         risk_level: Optional[str] = None,
         limit: Optional[int] = None,
@@ -233,6 +228,10 @@ class ClaimService:
         An employee is always scoped to their own claims regardless of the filters they send; a
         non-existent ``employee_code`` filter yields an empty list rather than an error, so a
         dashboard filter cannot 404.
+
+        ``status`` accepts either one value or several (OR'd) — a caller that needs claims across
+        multiple statuses (e.g. finance's Finance_Review + Disbursed + Rejected view) makes one
+        request instead of one per status.
         """
         query_employee_id: Optional[uuid.UUID] = None
 
@@ -250,6 +249,43 @@ class ClaimService:
         return self._claims.search(
             ClaimQuery(
                 employee_id=query_employee_id,
+                category=category or None,
+                statuses=self._coerce_statuses(status),
+                risk_level=self._coerce_risk_level(risk_level),
+                limit=limit,
+                offset=offset,
+            )
+        )
+
+    def list_claims_for_manager(
+        self,
+        *,
+        actor: Actor,
+        category: Optional[str] = None,
+        status: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> Sequence[Claim]:
+        """Claims filed by ``actor``'s direct reports — the manager's own team, not the whole
+        review queue (which may hold claims from anyone, assigned or unassigned).
+
+        Same filter set and the same response shape as :meth:`list_claims`, just scoped by
+        reporting line instead of by a single ``employee_id``. An actor with no employee record,
+        or with no direct reports, gets an empty list rather than an error — an empty team is not
+        a failure.
+        """
+        manager = self._employees.find_actor_employee(actor)
+        if manager is None:
+            return []
+
+        reports = self._employees.list_direct_reports(manager)
+        if not reports:
+            return []
+
+        return self._claims.search(
+            ClaimQuery(
+                employee_ids=[report.id for report in reports],
                 category=category or None,
                 status=self._coerce_status(status),
                 risk_level=self._coerce_risk_level(risk_level),
@@ -782,11 +818,12 @@ class ClaimService:
         notes: Optional[str] = None,
         expected_version: Optional[int] = None,
     ) -> Claim:
-        """Apply a reviewer decision (``APPROVE`` / ``REJECT`` / ``DISBURSE`` / ``FLAG_FRAUD``).
+        """Apply a reviewer decision (``APPROVE`` / ``REJECT`` / ``FLAG_FRAUD``).
 
         The claim's current state decides the target: approving a claim in manager review escalates
-        it to finance review, exactly as before. An action that is not legal from the current state
-        raises ``409`` naming the states that are.
+        it to finance review; approving anywhere else (finance review, auto-approved, or a cleared
+        fraud flag) is the final reviewer step — there is no separate disbursement action. An
+        action that is not legal from the current state raises ``409`` naming the states that are.
         """
         normalized = (action or "").strip().upper()
         if normalized not in CLAIM_ACTIONS:
@@ -805,12 +842,6 @@ class ClaimService:
 
         validators.require_not_terminal(claim)
 
-        if normalized == "DISBURSE" and actor.role not in DISBURSE_ROLES:
-            raise ForbiddenError(
-                "Only finance or admin can disburse.",
-                details={"permittedRoles": sorted(DISBURSE_ROLES)},
-            )
-
         before_status = claim.status
         workflow = self._workflows.get_active_for_claim(claim.id)
 
@@ -825,18 +856,6 @@ class ClaimService:
                 self._workflows.reject_open_step(
                     workflow, required_role=actor.role, decided_by_sub=actor.sub, reason=notes
                 )
-        elif normalized == "DISBURSE":
-            claim = self._claims.mark_reimbursed(
-                claim, actor_role=actor.role, actor_sub=actor.sub,
-                actor_name=actor.name, notes=notes,
-            )
-            if workflow is not None:
-                self._workflows.complete_step(
-                    workflow, required_role="finance",
-                    status=ApprovalStepStatus.APPROVED, decided_by_sub=actor.sub,
-                    decision_notes=notes,
-                )
-                self._workflows.cancel_open_steps(workflow, decided_by_sub=actor.sub)
         else:  # FLAG_FRAUD
             claim = self._claims.flag_fraud(
                 claim, actor_role=actor.role, actor_sub=actor.sub,
@@ -922,6 +941,10 @@ class ClaimService:
                 decided_by_sub=actor.sub,
                 decision_notes=notes,
             )
+            # Approve is now the final reviewer action reaching this branch (finance approving
+            # from Finance_Review, or a direct approval of an Auto_Approved/cleared-fraud claim) —
+            # there is no later DISBURSE call to close the workflow out, so this has to do it.
+            self._workflows.advance_or_complete(workflow)
         return self._claims.approve_claim(
             claim, actor_role=actor.role, actor_sub=actor.sub,
             actor_name=actor.name, notes=notes,
@@ -1310,6 +1333,27 @@ class ClaimService:
             return ClaimStatus.coerce(value)
         except ValueError as exc:
             raise ValidationError(str(exc), details={"field": "status"})
+
+    @staticmethod
+    def _coerce_statuses(value: Union[str, Sequence[str], None]) -> Optional[list[ClaimStatus]]:
+        """Like :meth:`_coerce_status`, but for the ``status`` filter's OR-list form.
+
+        Accepts a bare string (the common single-value case) or a sequence of strings (repeated
+        ``?status=`` query params) — a bare string is *not* iterated character-by-character, which
+        ``list(value)`` would otherwise silently do.
+        """
+        if not value:
+            return None
+        raw_values = [value] if isinstance(value, str) else list(value)
+        coerced: list[ClaimStatus] = []
+        for raw in raw_values:
+            if not raw:
+                continue
+            try:
+                coerced.append(ClaimStatus.coerce(raw))
+            except ValueError as exc:
+                raise ValidationError(str(exc), details={"field": "status"})
+        return coerced or None
 
     @staticmethod
     def _coerce_risk_level(value: Optional[str]) -> Optional[FraudRiskLevel]:

@@ -61,7 +61,7 @@ function getCurrentStepCopy(
     case "Finance_Review":
       return {
         title: "Currently: Finance review",
-        body: "Finance is verifying the claim ahead of disbursement. You'll be notified once it's processed.",
+        body: "Finance is verifying the claim before approving it. You'll be notified once it's processed.",
       };
     case "Flagged_Fraud":
       return {
@@ -72,7 +72,7 @@ function getCurrentStepCopy(
     case "Auto_Approved":
       return {
         title: "Currently: Approved",
-        body: "This claim has been approved and is queued for disbursement.",
+        body: "This claim has been approved. It should reflect in your account shortly.",
       };
     case "Rejected":
       return {
@@ -80,9 +80,11 @@ function getCurrentStepCopy(
         body: "This claim was rejected. Check comments below for details, or contact your manager.",
       };
     case "Disbursed":
+      // Retired status (see app.domain.claim_state_machine on the backend) — kept only so a
+      // claim already paid out before that change still renders sensible copy.
       return {
-        title: "Disbursed",
-        body: "Payment has been issued for this claim. It should reflect in your account shortly.",
+        title: "Approved",
+        body: "This claim has been approved. It should reflect in your account shortly.",
       };
     case "Withdrawn":
       return {

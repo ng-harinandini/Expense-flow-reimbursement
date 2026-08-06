@@ -6,65 +6,77 @@ import { BadgeCheck, Search } from "lucide-react";
 
 import { DataGrid } from "@/components/shared/DataGrid";
 import { Input } from "@/components/ui/input";
-import { INITIAL_MULTI_ITEM_CLAIMS } from "@/data/claims";
-import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
-import type { Claim, ClaimStatus, WorkflowStepLog } from "@/types";
+import { useClaimsQuery, useExecuteClaimActionMutation } from "@/api/claims";
+import { getErrorMessage } from "@/lib/apiError";
+import { useToast } from "@/components/ui/toast";
+import type { Claim, ClaimStatus } from "@/types";
 
 import { useExpandableItems } from "@/components/my_claims/useExpandableItems";
 import { CENTERED_COL_DEF } from "@/components/my_claims/columns";
 
-import { buildColumnDefs, managerNameFor } from "./columns";
+import { buildColumnDefs, isFinanceRejected, managerNameFor } from "./columns";
 import { FinanceReviewDialog } from "./FinanceReviewDialog";
 
-const PENDING_STATUS: ClaimStatus = "Finance_Review";
+const RELEVANT_STATUSES: ClaimStatus[] = ["Finance_Review", "Approved", "Disbursed", "Rejected"];
 
 // Tall enough for the stacked claim-title + date-range cell.
 const ROW_HEIGHT = 64;
 
 function FinanceApprovals() {
-  const [claims, setClaims] = React.useState<Claim[]>(INITIAL_MULTI_ITEM_CLAIMS);
+  const toast = useToast();
   const [search, setSearch] = React.useState("");
   const [selectedClaim, setSelectedClaim] = React.useState<Claim | null>(null);
   const [isDetailOpen, setIsDetailOpen] = React.useState(false);
+
+const { data: fetchedClaims = [], isLoading, error } = useClaimsQuery({
+    status: RELEVANT_STATUSES,
+  });
+  const allClaims = React.useMemo(
+    () => fetchedClaims.filter((claim) => claim.status !== "Rejected" || isFinanceRejected(claim)),
+    [fetchedClaims]
+  );
+
+  const actionMutation = useExecuteClaimActionMutation();
 
   const handleView = React.useCallback((claim: Claim) => {
     setSelectedClaim(claim);
     setIsDetailOpen(true);
   }, []);
 
-  // TODO: replace with PATCH /api/claims/:id/status once the endpoint exists.
-  const applyDecision = React.useCallback(
-    (claim: Claim, nextStatus: ClaimStatus, action: string, notes?: string) => {
-      const financeActor = INITIAL_EMPLOYEES.find((e) => e.role === "finance")?.name ?? "Finance";
-      const entry: WorkflowStepLog = {
-        timestamp: new Date().toISOString(),
-        actorName: financeActor,
-        actorRole: "finance",
-        stepName: "Finance Review",
-        action,
-        status: nextStatus === "Rejected" ? "FAILED" : "SUCCESS",
-        notes,
-      };
-
-      setClaims((current) =>
-        current.map((c) =>
-          c.id === claim.id
-            ? { ...c, status: nextStatus, workflowHistory: [...c.workflowHistory, entry] }
-            : c
-        )
-      );
-    },
-    []
-  );
-
+  // Approve is finance's final reviewer step — there is no separate disbursement action to chain
+  // to any more (see app.domain.claim_state_machine on the backend).
   const handleApprove = React.useCallback(
-    (claim: Claim) => applyDecision(claim, "Approved", "Approved claim for disbursement"),
-    [applyDecision]
+    async (claim: Claim) => {
+      try {
+        await actionMutation.mutateAsync({ claimId: claim.id, action: "APPROVE" });
+        toast({ message: `${claim.claimNumber} approved.`, type: "success" });
+      } catch (err) {
+        toast({
+          message: getErrorMessage(err, "Failed to approve this claim."),
+          type: "error",
+        });
+      }
+    },
+    [actionMutation, toast]
   );
 
   const handleReject = React.useCallback(
-    (claim: Claim, reason: string) => applyDecision(claim, "Rejected", "Rejected claim", reason),
-    [applyDecision]
+    async (claim: Claim, reason: string) => {
+      try {
+        await actionMutation.mutateAsync({
+          claimId: claim.id,
+          action: "REJECT",
+          notes: reason,
+        });
+        toast({ message: `${claim.claimNumber} rejected.`, type: "success" });
+      } catch (err) {
+        toast({
+          message: getErrorMessage(err, "Failed to reject this claim."),
+          type: "error",
+        });
+      }
+    },
+    [actionMutation, toast]
   );
 
   const columnDefs = React.useMemo<ColDef<Claim>[]>(
@@ -75,9 +87,7 @@ function FinanceApprovals() {
   const rowData = React.useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return claims.filter((claim) => {
-      if (claim.status !== PENDING_STATUS) return false;
-
+    return allClaims.filter((claim) => {
       return (
         !query ||
         claim.claimNumber.toLowerCase().includes(query) ||
@@ -86,7 +96,7 @@ function FinanceApprovals() {
         managerNameFor(claim).toLowerCase().includes(query)
       );
     });
-  }, [claims, search]);
+  }, [allClaims, search]);
 
   const defaultColDef = React.useMemo<ColDef>(
     () => ({
@@ -110,7 +120,8 @@ function FinanceApprovals() {
           <div className="min-w-0">
             <h2 className="text-xl font-semibold text-foreground">Finance Approvals</h2>
             <p className="text-sm text-muted-foreground">
-              Review manager-approved claims pending finance sign-off
+              Review manager-approved claims pending finance sign-off, plus what finance has
+              already approved or rejected
             </p>
           </div>
         </div>
@@ -129,15 +140,22 @@ function FinanceApprovals() {
       </div>
 
       <div className="h-[560px] px-6 pb-6">
-        <DataGrid
-          {...expandableProps}
-          defaultColDef={defaultColDef}
-          overlayNoRowsTemplate="No claims pending finance approval."
-          domLayout="normal"
-          rowHeight={ROW_HEIGHT}
-          headerHeight={44}
-          suppressCellFocus
-        />
+        {error ? (
+          <div className="flex h-full items-center justify-center text-sm text-destructive">
+            {getErrorMessage(error, "Failed to load claims.")}
+          </div>
+        ) : (
+          <DataGrid
+            {...expandableProps}
+            defaultColDef={defaultColDef}
+            loading={isLoading}
+            overlayNoRowsTemplate="No claims found matching your filter criteria."
+            domLayout="normal"
+            rowHeight={ROW_HEIGHT}
+            headerHeight={44}
+            suppressCellFocus
+          />
+        )}
       </div>
 
       <FinanceReviewDialog
