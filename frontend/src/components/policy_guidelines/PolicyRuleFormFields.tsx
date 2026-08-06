@@ -8,10 +8,12 @@ import { Label } from "@/components/ui/Label";
 import { Input } from "@/components/ui/input";
 import { EXPENSE_CATEGORIES } from "@/components/submit_expense/helpers";
 
+import { POLICY_RULE_GRADES, POLICY_RULE_UNITS } from "./helpers";
 import type { PolicyRuleFormValues } from "./policyRuleSchema";
 
-const SELECT_CLASSES =
-  "flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent py-1 pr-3 pl-9 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30";
+const SELECT_BASE_CLASSES =
+  "flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent py-1 pr-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30";
+const SELECT_CLASSES = `${SELECT_BASE_CLASSES} pl-9`;
 
 interface PolicyRuleFormFieldsProps {
   register: UseFormRegister<PolicyRuleFormValues>;
@@ -50,12 +52,19 @@ export function PolicyRuleFormFields({ register, errors, idPrefix }: PolicyRuleF
 
       <div className="space-y-1.5">
         <Label htmlFor={fieldId("gradeApplicable")}>Grade applicable</Label>
-        <Input
+        <select
           id={fieldId("gradeApplicable")}
-          placeholder="e.g. All, L1-L3, L4+, Manager+"
           aria-invalid={!!errors.gradeApplicable}
+          className={`${SELECT_BASE_CLASSES} pl-3`}
           {...register("gradeApplicable")}
-        />
+        >
+          <option value="">Select a grade</option>
+          {POLICY_RULE_GRADES.map((grade) => (
+            <option key={grade} value={grade}>
+              {grade}
+            </option>
+          ))}
+        </select>
         {errors.gradeApplicable && (
           <p className="text-xs text-destructive">{errors.gradeApplicable.message}</p>
         )}
@@ -84,13 +93,19 @@ export function PolicyRuleFormFields({ register, errors, idPrefix }: PolicyRuleF
         <Label htmlFor={fieldId("maxAmountUnit")}>Unit</Label>
         <div className="relative">
           <Ruler className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
+          <select
             id={fieldId("maxAmountUnit")}
-            placeholder="e.g. day, trip, night, event"
             aria-invalid={!!errors.maxAmountUnit}
-            className="pl-9"
+            className={SELECT_CLASSES}
             {...register("maxAmountUnit")}
-          />
+          >
+            <option value="">Select a unit</option>
+            {POLICY_RULE_UNITS.map((unit) => (
+              <option key={unit} value={unit}>
+                {unit}
+              </option>
+            ))}
+          </select>
         </div>
         {errors.maxAmountUnit && (
           <p className="text-xs text-destructive">{errors.maxAmountUnit.message}</p>

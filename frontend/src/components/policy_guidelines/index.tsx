@@ -6,26 +6,74 @@ import { PencilLine, ShieldCheck, Sparkles } from "lucide-react";
 
 import { DataGrid } from "@/components/shared/DataGrid";
 import { Button } from "@/components/ui/Button";
-import { INITIAL_POLICY_RULES } from "@/data/policyRules";
+import { usePolicyRulesQuery, usePutPolicyRulesMutation } from "@/api/policyRules";
 import type { AdminPolicyRule } from "@/types";
 
 import { buildColumnDefs } from "./columns";
 import { nextRuleId, formValuesToPolicyRule } from "./helpers";
 import { AddPolicyRuleDialog } from "./AddPolicyRuleDialog";
 import { AddPolicyRuleWithAIDialog } from "./AddPolicyRuleWithAIDialog";
+import { DeletePolicyRuleDialog } from "./DeletePolicyRuleDialog";
 import type { PolicyRuleFormValues } from "./policyRuleSchema";
 
 function PolicyGuidelines() {
-  const [rules, setRules] = React.useState<AdminPolicyRule[]>(INITIAL_POLICY_RULES);
+  const { data: rules = [], isLoading } = usePolicyRulesQuery();
+  const putPolicyRules = usePutPolicyRulesMutation();
+
   const [isManualOpen, setIsManualOpen] = React.useState(false);
   const [isAIOpen, setIsAIOpen] = React.useState(false);
+  const [editingRule, setEditingRule] = React.useState<AdminPolicyRule | null>(null);
+  const [deletingRule, setDeletingRule] = React.useState<AdminPolicyRule | null>(null);
+  const [isDeleteOpen, setIsDeleteOpen] = React.useState(false);
 
-  // TODO: replace with POST /api/policy-rules once the endpoint exists.
-  const addRule = React.useCallback((values: PolicyRuleFormValues) => {
-    setRules((current) => [...current, formValuesToPolicyRule(nextRuleId(current), values)]);
+  const handleAdd = React.useCallback(() => {
+    setEditingRule(null);
+    setIsManualOpen(true);
   }, []);
 
-  const columnDefs = React.useMemo<ColDef<AdminPolicyRule>[]>(() => buildColumnDefs(), []);
+  const handleEdit = React.useCallback((rule: AdminPolicyRule) => {
+    setEditingRule(rule);
+    setIsManualOpen(true);
+  }, []);
+
+  const handleDelete = React.useCallback((rule: AdminPolicyRule) => {
+    setDeletingRule(rule);
+    setIsDeleteOpen(true);
+  }, []);
+
+  // The backend only exposes `PUT /policy-rules` — a full-ruleset publish that versions every
+  // rule present in the payload and retires any active rule whose code is missing from it. So
+  // create, update, and delete all build the full desired list here, then send it in one call.
+  const publishRules = React.useCallback(
+    (nextRules: AdminPolicyRule[]) => putPolicyRules.mutateAsync(nextRules),
+    [putPolicyRules]
+  );
+
+  const handleSave = React.useCallback(
+    async (values: PolicyRuleFormValues) => {
+      if (editingRule) {
+        const updated = formValuesToPolicyRule(editingRule.id, values, editingRule.code);
+        await publishRules(rules.map((r) => (r.id === editingRule.id ? updated : r)));
+        return;
+      }
+
+      const created = formValuesToPolicyRule(nextRuleId(rules), values);
+      await publishRules([...rules, created]);
+    },
+    [editingRule, rules, publishRules]
+  );
+
+  const handleConfirmDelete = React.useCallback(
+    async (rule: AdminPolicyRule) => {
+      await publishRules(rules.filter((r) => r.id !== rule.id));
+    },
+    [rules, publishRules]
+  );
+
+  const columnDefs = React.useMemo<ColDef<AdminPolicyRule>[]>(
+    () => buildColumnDefs(handleEdit, handleDelete),
+    [handleEdit, handleDelete]
+  );
 
   const defaultColDef = React.useMemo<ColDef>(
     () => ({
@@ -52,7 +100,7 @@ function PolicyGuidelines() {
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row">
-          <Button variant="outline" onClick={() => setIsManualOpen(true)}>
+          <Button variant="outline" onClick={handleAdd}>
             <PencilLine />
             Add Manually
           </Button>
@@ -66,6 +114,7 @@ function PolicyGuidelines() {
       <div className="h-[560px] px-6 pb-6">
         <DataGrid<AdminPolicyRule>
           rowData={rules}
+          loading={isLoading}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
           getRowId={(params) => String(params.data.id)}
@@ -77,12 +126,26 @@ function PolicyGuidelines() {
         />
       </div>
 
-      <AddPolicyRuleDialog open={isManualOpen} onOpenChange={setIsManualOpen} onSave={addRule} />
+      <AddPolicyRuleDialog
+        rule={editingRule}
+        open={isManualOpen}
+        onOpenChange={setIsManualOpen}
+        onSave={handleSave}
+      />
+
+      <DeletePolicyRuleDialog
+        rule={deletingRule}
+        open={isDeleteOpen}
+        onOpenChange={setIsDeleteOpen}
+        onConfirm={handleConfirmDelete}
+      />
 
       <AddPolicyRuleWithAIDialog
         open={isAIOpen}
         onOpenChange={setIsAIOpen}
-        onSaveRule={addRule}
+        onSaveRule={(values) => {
+          void publishRules([...rules, formValuesToPolicyRule(nextRuleId(rules), values)]);
+        }}
       />
     </div>
   );
