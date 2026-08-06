@@ -284,8 +284,13 @@ class ClaimService:
 
         Mirrors ``POST /claims``, which has always been a create-and-submit call. All of it runs in
         the caller's single transaction.
+
+        The employee must have an active reporting manager: the manager is the first approval step
+        (see :meth:`_start_workflow`), so without one the claim has no approver. That precondition
+        is checked before anything is written, so a rejected submission leaves no draft behind.
         """
         employee = self._employees.resolve_actor_employee(actor)
+        validators.require_reporting_manager(employee)
         actor = actor.with_name(employee.full_name)
 
         claim = self._build_draft(payload, employee=employee, actor=actor)

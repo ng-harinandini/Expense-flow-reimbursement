@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/card";
 import { createClaim } from "@/api/claims";
 import { getErrorMessage } from "@/lib/apiError";
+import { useToast } from "@/components/ui/toast";
 import { AddExpenseItemDialog } from "@/components/submit_expense/AddExpenseItemDialog";
 import { ExpenseItemsSection } from "@/components/submit_expense/ExpenseItemsSection";
 import { ClaimDetailsCard } from "@/components/submit_expense/ClaimDetailsCard";
@@ -28,6 +29,7 @@ import type { ExpenseItemDraft } from "@/components/submit_expense/helpers";
 
 export default function SubmitExpense() {
   const router = useRouter();
+  const toast = useToast();
   const claimForm = useForm<ClaimFormValues>({
     resolver: yupResolver(claimSchema),
     defaultValues: CLAIM_FORM_DEFAULTS,
@@ -38,7 +40,6 @@ export default function SubmitExpense() {
   const [items, setItems] = React.useState<ExpenseItemDraft[]>([]);
   const [isDialogOpen, setIsDialogOpen] = React.useState(false);
   const [editingItem, setEditingItem] = React.useState<ExpenseItemDraft | null>(null);
-  const [raiseClaimError, setRaiseClaimError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   const handleAddClick = async () => {
@@ -63,37 +64,40 @@ export default function SubmitExpense() {
       const exists = current.some((i) => i.id === item.id);
       return exists ? current.map((i) => (i.id === item.id ? item : i)) : [...current, item];
     });
-    setRaiseClaimError(null);
   };
 
   const handleRaiseClaim = async () => {
     const claimValid = await trigger();
     if (!claimValid) {
-      setRaiseClaimError("Fix the claim details above before raising the claim.");
+      toast({ message: "Fix the claim details above before raising the claim.", type: "error" });
       return;
     }
     if (items.length === 0) {
-      setRaiseClaimError("Add at least one expense item before raising a claim.");
+      toast({ message: "Add at least one expense item before raising a claim.", type: "error" });
       return;
     }
 
-    setRaiseClaimError(null);
     setIsSubmitting(true);
 
     try {
       const result = await createClaim(getValues(), items);
 
       if (!result?.id) {
-        setRaiseClaimError("The claim could not be confirmed. Please try again.");
+        toast({
+          message: "The claim could not be confirmed. Please try again.",
+          type: "error",
+        });
         setIsSubmitting(false);
         return;
       }
 
+      toast({ message: "Claim raised successfully.", type: "success" });
       claimForm.reset();
       setItems([]);
       router.push("/my-claims");
     } catch (error) {
-      setRaiseClaimError(getErrorMessage(error, "Failed to submit the claim. Please try again."));
+      const message = getErrorMessage(error, "Failed to submit the claim. Please try again.");
+      toast({ message, type: "error" });
       setIsSubmitting(false);
     }
   };
@@ -142,7 +146,6 @@ export default function SubmitExpense() {
             onEdit={handleEditItem}
             onDelete={handleDeleteItem}
             onRaiseClaim={handleRaiseClaim}
-            raiseClaimError={raiseClaimError}
             isSubmitting={isSubmitting}
           />
         </CardContent>
