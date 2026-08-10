@@ -31,18 +31,45 @@ export interface Employee {
 }
 
 export type ExpenseCategory =
+  | 'Air Travel'
+  | 'Train Travel'
+  | 'Taxi / Cab / Ride-hailing'
+  | 'Rental Car'
+  | 'Fuel / Mileage'
+  | 'Hotel / Lodging'
   | 'Meals'
-  | 'Ground Transport'
-  | 'Flights'
-  | 'Lodging'
-  | 'Client Entertainment'
-  | 'Communications & Connectivity'
-  | 'Training & Professional Dev'
-  | 'Software & Subscriptions'
-  | 'Team Events'
-  | 'Relocation'
-  | 'Health & Wellness'
-  | 'Misc / Other';
+  | 'Client / Business Entertainment'
+  | 'Parking & Tolls'
+  | 'Communication'
+  | 'Training / Certification / Conference'
+  | 'Office Supplies / Equipment'
+  | 'Software / Subscriptions'
+  | 'Courier / Postage'
+  | 'Miscellaneous / Others';
+
+export type CategoryFieldDataType = 'text' | 'number' | 'date' | 'boolean' | 'enum';
+
+/** One entry of a category's ``customFields`` extraction schema (see ``GET /categories``). */
+export interface CategoryFieldDefinition {
+  name: string;
+  label: string;
+  description?: string;
+  dataType: CategoryFieldDataType;
+  options?: string[];
+  required: boolean;
+}
+
+/** An ``expense_categories`` row, as the admin Categories page manages it. */
+export interface ExpenseCategoryAdmin {
+  id?: string;
+  code: string;
+  name: string;
+  description?: string;
+  displayOrder: number;
+  isActive: boolean;
+  isCommon: boolean;
+  customFields: CategoryFieldDefinition[];
+}
 
 export type ClaimStatus =
   | 'Draft'

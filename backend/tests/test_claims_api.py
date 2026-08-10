@@ -200,15 +200,15 @@ def test_internal_comments_hidden_from_the_claim_owner(client, make_claim):
 
 
 def test_filter_by_status_and_category(client, make_claim):
-    lodging = make_claim(ClaimStatus.MANAGER_REVIEW, category="Lodging")
+    lodging = make_claim(ClaimStatus.MANAGER_REVIEW, category="Hotel / Lodging")
     as_role("manager", employee_id=SEED_MANAGER_CODE)
 
     by_status = client.get("/api/claims?status=Manager_Review").json()
     assert lodging.id.__str__() in {c["id"] for c in by_status}
     assert all(c["status"] == "Manager_Review" for c in by_status)
 
-    by_category = client.get("/api/claims?category=Lodging").json()
-    assert all(c["category"] == "Lodging" for c in by_category)
+    by_category = client.get("/api/claims", params={"category": "Hotel / Lodging"}).json()
+    assert all(c["category"] == "Hotel / Lodging" for c in by_category)
 
 
 def test_canonical_status_alias_accepted_in_filters(client, make_claim):

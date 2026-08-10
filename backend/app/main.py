@@ -21,6 +21,7 @@ from app.api import (
     audit_logs,
     auth,
     aws,
+    categories,
     claims,
     expense_items,
     health,
@@ -59,6 +60,7 @@ register_exception_handlers(app)
 # Register API routers under /api prefix
 app.include_router(claims.router, prefix=settings.API_PREFIX)
 app.include_router(policy_rules.router, prefix=settings.API_PREFIX)
+app.include_router(categories.router, prefix=settings.API_PREFIX)
 app.include_router(audit_logs.router, prefix=settings.API_PREFIX)
 app.include_router(ai.router, prefix=settings.API_PREFIX)
 app.include_router(aws.router, prefix=settings.API_PREFIX)

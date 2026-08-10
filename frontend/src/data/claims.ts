@@ -24,7 +24,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     items: [
       {
         id: 'item-2001-1',
-        category: 'Flights',
+        category: 'Air Travel',
         merchantVendor: 'IndiGo Airlines',
         expenseDate: '2026-07-20',
         description: 'Round-trip flight to Mumbai for the client workshop.',
@@ -35,7 +35,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
       },
       {
         id: 'item-2001-2',
-        category: 'Lodging',
+        category: 'Hotel / Lodging',
         merchantVendor: 'Taj Lands End',
         expenseDate: '2026-07-20',
         description: '3-night stay near the client office.',
@@ -57,7 +57,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
       },
       {
         id: 'item-2001-4',
-        category: 'Ground Transport',
+        category: 'Taxi / Cab / Ride-hailing',
         merchantVendor: 'Uber',
         expenseDate: '2026-07-21',
         description: 'Airport to hotel transfer.',
@@ -141,7 +141,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     items: [
       {
         id: 'item-2003-1',
-        category: 'Ground Transport',
+        category: 'Taxi / Cab / Ride-hailing',
         merchantVendor: 'Ola Cabs',
         expenseDate: '2026-05-02',
         description: 'Airport transfer for late-night arrival.',
@@ -152,7 +152,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
       },
       {
         id: 'item-2003-2',
-        category: 'Client Entertainment',
+        category: 'Client / Business Entertainment',
         merchantVendor: 'The Leela Lounge',
         expenseDate: '2026-05-02',
         description: 'Dinner with prospective client.',
@@ -194,7 +194,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     items: [
       {
         id: 'item-2004-1',
-        category: 'Flights',
+        category: 'Air Travel',
         merchantVendor: 'United Airlines',
         expenseDate: '2025-11-30',
         description: 'Round-trip flight to Las Vegas for AWS re:Invent.',
@@ -205,7 +205,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
       },
       {
         id: 'item-2004-2',
-        category: 'Lodging',
+        category: 'Hotel / Lodging',
         merchantVendor: 'The Venetian',
         expenseDate: '2025-11-30',
         description: '4-night conference hotel stay.',
@@ -216,7 +216,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
       },
       {
         id: 'item-2004-3',
-        category: 'Training & Professional Dev',
+        category: 'Training / Certification / Conference',
         merchantVendor: 'AWS Events',
         expenseDate: '2025-11-28',
         description: 'Conference registration pass.',
@@ -266,7 +266,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     items: [
       {
         id: 'item-2005-1',
-        category: 'Ground Transport',
+        category: 'Taxi / Cab / Ride-hailing',
         merchantVendor: 'Uber',
         expenseDate: '2026-07-27',
         description: 'Client site visit for onboarding kickoff.',
@@ -300,7 +300,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
     items: [
       {
         id: 'item-2006-1',
-        category: 'Flights',
+        category: 'Air Travel',
         merchantVendor: 'Vistara',
         expenseDate: '2026-07-10',
         description: 'Round-trip flight to Chennai for vendor contract negotiation.',
@@ -311,7 +311,7 @@ export const INITIAL_MULTI_ITEM_CLAIMS: Claim[] = [
       },
       {
         id: 'item-2006-2',
-        category: 'Lodging',
+        category: 'Hotel / Lodging',
         merchantVendor: 'ITC Grand Chola',
         expenseDate: '2026-07-10',
         description: '2-night stay for vendor negotiations.',

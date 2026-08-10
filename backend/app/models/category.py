@@ -6,13 +6,27 @@ denormalized ``category`` text snapshot. That is deliberate, not redundancy:
   * ``category_id`` is the referential link — it is what an admin screen edits and what keeps the
     set of selectable categories closed.
   * ``expense_items.category`` is the string :mod:`app.services.policy_engine` literally compares
-    against (``"Meals"``, ``"Lodging"``, …). It is frozen as of submission so that renaming a row
-    here cannot retroactively change how a historical item was judged.
+    against (``"Meals"``, ``"Hotel / Lodging"``, …). It is frozen as of submission so that renaming
+    a row here cannot retroactively change how a historical item was judged.
 
 ``name`` must therefore stay in lockstep with ``policy_rules.category``; the seed data and
-``tests/test_migrations.py`` assert both sides carry the same five values.
+``tests/test_migrations.py`` assert both sides carry the same values.
 
-Schema is owned by Alembic — this declaration is the source migration ``0008`` was authored from.
+One row is the *common-fields* bucket, not a real category: ``code="COMMON"``, ``is_common=True``.
+It is never selectable as an expense item's category and is excluded from anything that lists
+"categories" for classification purposes — it exists only so ``custom_fields`` (see below) has one
+place to hold the extraction fields every invoice carries regardless of category.
+
+``custom_fields`` is the JSON schema of extraction fields for this category (or, for the common
+row, the fields shared by every category): a list of
+``{name, label, description, data_type, options, required}`` objects. It is JSONB, not a child
+table, because it is curated content edited as a whole set per category and never individually
+queried/joined/indexed — the same reasoning as ``PolicyRule.special_rules``
+(:mod:`app.models.policy`). It defines the *shape* invoice extraction should fill in
+(``ExpenseItem.ocr_extracted_json``); it does not itself validate or populate anything yet.
+
+Schema is owned by Alembic — this declaration is the source migration ``0008`` was authored from,
+extended by migration ``0012`` (``custom_fields`` / ``is_common`` + the 15-category reseed).
 """
 
 from __future__ import annotations
@@ -28,6 +42,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -46,6 +61,7 @@ class ExpenseCategory(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "display_order >= 0", name="ck_expense_categories_display_order_non_negative"
         ),
         Index("ix_expense_categories_is_active", "is_active"),
+        Index("ix_expense_categories_is_common", "is_common"),
     )
 
     # Stable machine key, so ``name`` can be reworded without breaking anything that joins.
@@ -62,6 +78,12 @@ class ExpenseCategory(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
+    # True only for the single "COMMON" bucket row — not a selectable expense category.
+    is_common: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    # Extraction field schema: [{name, label, description, data_type, options, required}, ...].
+    custom_fields: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<ExpenseCategory {self.code} {self.name}>"

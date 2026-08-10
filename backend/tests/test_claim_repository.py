@@ -77,15 +77,15 @@ def test_search_filters_by_employee(claims, make_claim, employee, other_employee
 
 
 def test_search_filters_by_status_and_category(claims, make_claim):
-    reviewed = make_claim(ClaimStatus.MANAGER_REVIEW, category="Lodging")
+    reviewed = make_claim(ClaimStatus.MANAGER_REVIEW, category="Hotel / Lodging")
     make_claim(ClaimStatus.DRAFT, category="Meals")
 
     by_status = claims.search(ClaimQuery(status=ClaimStatus.MANAGER_REVIEW))
     assert reviewed.id in {c.id for c in by_status}
     assert all(c.status is ClaimStatus.MANAGER_REVIEW for c in by_status)
 
-    by_category = claims.search(ClaimQuery(category="Lodging"))
-    assert all(c.category == "Lodging" for c in by_category)
+    by_category = claims.search(ClaimQuery(category="Hotel / Lodging"))
+    assert all(c.category == "Hotel / Lodging" for c in by_category)
 
 
 def test_search_filters_by_expense_date_window(claims, make_claim):

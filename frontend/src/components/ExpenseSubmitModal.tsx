@@ -27,7 +27,7 @@ const SAMPLE_RECEIPTS = [
   {
     name: 'Marriott Chicago Hotel Stay ($180.00)',
     vendor: 'Marriott Downtown Chicago',
-    category: 'Lodging' as ExpenseCategory,
+    category: 'Hotel / Lodging' as ExpenseCategory,
     amount: 180.00,
     date: '2026-07-21',
     description: '1 Night stay for client Architecture review',
@@ -41,7 +41,7 @@ const SAMPLE_RECEIPTS = [
   {
     name: 'Uber Airport Ride ($48.50)',
     vendor: 'Uber Technologies',
-    category: 'Ground Transport' as ExpenseCategory,
+    category: 'Taxi / Cab / Ride-hailing' as ExpenseCategory,
     amount: 48.50,
     date: '2026-07-23',
     description: 'Rideshare airport transfer for client meeting',
@@ -54,7 +54,7 @@ const SAMPLE_RECEIPTS = [
   {
     name: 'Prime Steakhouse Client Dinner ($340.00 - Alcohol Included)',
     vendor: 'Prime Steakhouse',
-    category: 'Client Entertainment' as ExpenseCategory,
+    category: 'Client / Business Entertainment' as ExpenseCategory,
     amount: 340.00,
     date: '2026-07-20',
     description: 'Client dinner with VP of Engineering from Nexus Corp',
@@ -72,7 +72,7 @@ const SAMPLE_RECEIPTS = [
   {
     name: 'JetBrains IDE Subscription ($120.00 - Stale >90 days)',
     vendor: 'JetBrains s.r.o.',
-    category: 'Software & Subscriptions' as ExpenseCategory,
+    category: 'Software / Subscriptions' as ExpenseCategory,
     amount: 120.00,
     date: '2026-03-10', // 135 days old
     description: 'Developer IDE WebStorm license renewal',
@@ -179,7 +179,12 @@ export const ExpenseSubmitModal: React.FC<ExpenseSubmitModalProps> = ({
   } else if (category === 'Meals' && numAmount > 25) {
     preCheckStatus = 'MANAGER_REVIEW';
     preCheckMsg = `Above $25 auto-approve limit. Will route to Manager Review.`;
-  } else if (['Flights', 'Lodging', 'Client Entertainment', 'Training & Professional Dev', 'Team Events'].includes(category)) {
+  } else if ([
+    'Air Travel',
+    'Hotel / Lodging',
+    'Client / Business Entertainment',
+    'Training / Certification / Conference',
+  ].includes(category)) {
     preCheckStatus = 'MANAGER_REVIEW';
     preCheckMsg = `${category} category ALWAYS requires manual manager review.`;
   } else {
@@ -239,17 +244,21 @@ export const ExpenseSubmitModal: React.FC<ExpenseSubmitModalProps> = ({
               onChange={(e) => setCategory(e.target.value as ExpenseCategory)}
               className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             >
+              <option value="Air Travel">Air Travel (Always Manual Review)</option>
+              <option value="Train Travel">Train Travel</option>
+              <option value="Taxi / Cab / Ride-hailing">Taxi / Cab / Ride-hailing (Max $150 | Auto $50)</option>
+              <option value="Rental Car">Rental Car</option>
+              <option value="Fuel / Mileage">Fuel / Mileage</option>
+              <option value="Hotel / Lodging">Hotel / Lodging (L1-L3: $120/night | L4+: $250/night)</option>
               <option value="Meals">Meals (Max $40/day | Auto-approve $25)</option>
-              <option value="Ground Transport">Ground Transport - Taxi / Rideshare (Max $150 | Auto $50)</option>
-              <option value="Flights">Flights (Always Manual Review)</option>
-              <option value="Lodging">Lodging (L1-L3: $120/night | L4+: $250/night)</option>
-              <option value="Client Entertainment">Client Entertainment (Manager+ required | Max $500)</option>
-              <option value="Communications & Connectivity">Communications & Connectivity ($50/mo)</option>
-              <option value="Training & Professional Dev">Training & Professional Dev (Pre-approval required)</option>
-              <option value="Software & Subscriptions">Software & Subscriptions (Max $300/yr)</option>
-              <option value="Team Events">Team Events (Manager+ | $75/person)</option>
-              <option value="Health & Wellness">Health & Wellness ($50/mo)</option>
-              <option value="Misc / Other">Misc / Other (Max $50)</option>
+              <option value="Client / Business Entertainment">Client / Business Entertainment (Manager+ required | Max $500)</option>
+              <option value="Parking & Tolls">Parking & Tolls</option>
+              <option value="Communication">Communication</option>
+              <option value="Training / Certification / Conference">Training / Certification / Conference (Pre-approval required)</option>
+              <option value="Office Supplies / Equipment">Office Supplies / Equipment</option>
+              <option value="Software / Subscriptions">Software / Subscriptions</option>
+              <option value="Courier / Postage">Courier / Postage</option>
+              <option value="Miscellaneous / Others">Miscellaneous / Others</option>
             </select>
           </div>
 
@@ -299,10 +308,10 @@ export const ExpenseSubmitModal: React.FC<ExpenseSubmitModalProps> = ({
             />
           </div>
 
-          {['Client Entertainment', 'Meals', 'Team Events'].includes(category) && (
+          {['Client / Business Entertainment', 'Meals'].includes(category) && (
             <div>
               <label className="block text-slate-300 font-medium mb-1">
-                Attendees (Required for Client Entertainment & Group Meals)
+                Attendees (Required for Client / Business Entertainment & Group Meals)
               </label>
               <input
                 type="text"

@@ -72,6 +72,10 @@ def test_revision_graph_is_complete_and_joined():
     script = ScriptDirectory.from_config(alembic_config())
     revisions = {r.revision for r in script.walk_revisions()}
     assert revisions == {
+        "0012_category_custom_fields",
+        "0011_retire_disburse_action",
+        "0010_claim_withdrawal",
+        "0009_candidate_policy_rules",
         "0008_multi_item_claims",
         "0007_merge_heads",
         "0006_prompt_governance",
@@ -259,10 +263,10 @@ def test_all_five_policy_categories_seeded(db_engine):
         }
     assert {
         "Meals",
-        "Ground Transport",
-        "Flights",
-        "Lodging",
-        "Client Entertainment",
+        "Taxi / Cab / Ride-hailing",
+        "Air Travel",
+        "Hotel / Lodging",
+        "Client / Business Entertainment",
     } <= categories
 
 
@@ -277,7 +281,7 @@ def test_expense_categories_match_policy_rule_categories(db_engine):
         seeded = {
             row[0]
             for row in connection.execute(
-                text("SELECT name FROM expense_categories WHERE is_active")
+                text("SELECT name FROM expense_categories WHERE is_active AND NOT is_common")
             )
         }
         policy = {
@@ -288,12 +292,17 @@ def test_expense_categories_match_policy_rule_categories(db_engine):
         }
     assert {
         "Meals",
-        "Ground Transport",
-        "Flights",
-        "Lodging",
-        "Client Entertainment",
+        "Taxi / Cab / Ride-hailing",
+        "Air Travel",
+        "Hotel / Lodging",
+        "Client / Business Entertainment",
     } <= seeded
-    assert seeded <= policy, f"categories with no policy rule: {seeded - policy}"
+    # Only the five categories with bespoke policy_engine branches carry a seeded policy_rules row
+    # (see app.services.policy_engine's module docstring); the other ten fall through to that
+    # engine's generic else-branch default. So the invariant is narrower post-0012: every *seeded
+    # policy rule's* category must still resolve to a real, active expense_categories row — not
+    # the reverse.
+    assert policy <= seeded, f"policy rules with no matching category: {policy - seeded}"
 
 
 def test_seed_ids_are_deterministic():

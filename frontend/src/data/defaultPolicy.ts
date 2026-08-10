@@ -19,7 +19,7 @@ export const DEFAULT_POLICY_RULES: PolicyRuleDefinition[] = [
     ]
   },
   {
-    category: 'Ground Transport',
+    category: 'Taxi / Cab / Ride-hailing',
     gradeTier: 'All',
     maxAmountUSD: 150,
     autoApproveLimitUSD: 50,
@@ -32,7 +32,7 @@ export const DEFAULT_POLICY_RULES: PolicyRuleDefinition[] = [
     ]
   },
   {
-    category: 'Flights',
+    category: 'Air Travel',
     gradeTier: 'L1-L4: Economy (>=7 days advance) | L5-Director: Economy/Premium Economy >6hrs | VP+: Business >6hrs',
     maxAmountUSD: 'Per itinerary',
     autoApproveLimitUSD: null, // Always manual review
@@ -44,7 +44,7 @@ export const DEFAULT_POLICY_RULES: PolicyRuleDefinition[] = [
     ]
   },
   {
-    category: 'Lodging',
+    category: 'Hotel / Lodging',
     gradeTier: 'L1-L3: $120/night | L4+: $250/night',
     maxAmountUSD: 250,
     autoApproveLimitUSD: null, // Always manual review
@@ -57,7 +57,7 @@ export const DEFAULT_POLICY_RULES: PolicyRuleDefinition[] = [
     ]
   },
   {
-    category: 'Client Entertainment',
+    category: 'Client / Business Entertainment',
     gradeTier: 'Manager+',
     maxAmountUSD: 500,
     autoApproveLimitUSD: null, // Always manual review
@@ -70,7 +70,7 @@ export const DEFAULT_POLICY_RULES: PolicyRuleDefinition[] = [
     ]
   },
   {
-    category: 'Communications & Connectivity',
+    category: 'Communication',
     gradeTier: 'All / Remote roles',
     maxAmountUSD: 50,
     autoApproveLimitUSD: 50,
@@ -82,7 +82,7 @@ export const DEFAULT_POLICY_RULES: PolicyRuleDefinition[] = [
     ]
   },
   {
-    category: 'Training & Professional Dev',
+    category: 'Training / Certification / Conference',
     gradeTier: 'All (with manager pre-approval)',
     maxAmountUSD: 2000,
     autoApproveLimitUSD: null, // Always manual review
@@ -94,7 +94,7 @@ export const DEFAULT_POLICY_RULES: PolicyRuleDefinition[] = [
     ]
   },
   {
-    category: 'Software & Subscriptions',
+    category: 'Software / Subscriptions',
     gradeTier: 'All (role-relevant tools only)',
     maxAmountUSD: 300,
     autoApproveLimitUSD: 100,
@@ -106,41 +106,39 @@ export const DEFAULT_POLICY_RULES: PolicyRuleDefinition[] = [
     ]
   },
   {
-    category: 'Team Events',
-    gradeTier: 'Manager+ (organizer submits on behalf of team)',
-    maxAmountUSD: 300, // $75/person x max 4 events/yr
-    autoApproveLimitUSD: null, // Always manual review
-    receiptRequiredAboveUSD: 0,
+    category: 'Parking & Tolls',
+    gradeTier: 'All',
+    maxAmountUSD: 30,
+    autoApproveLimitUSD: 30,
+    receiptRequiredAboveUSD: 10,
     specialRules: [
-      '$75 per person per event, max 4 events per year.',
-      'Organizer (Manager+) submits on behalf of team.',
-      'Always routed for manual review.'
+      'Cap of $30/day.',
+      'Auto-approve up to $30; receipt required above $10.'
     ]
   },
   {
-    category: 'Relocation',
-    gradeTier: 'All approved relocations',
-    maxAmountUSD: 'Per signed agreement',
-    autoApproveLimitUSD: null, // Always manual review
-    receiptRequiredAboveUSD: 0,
-    specialRules: [
-      'Governed by separate signed relocation agreement.',
-      'Always manual review with Finance Director sign-off required.'
-    ]
-  },
-  {
-    category: 'Health & Wellness',
-    gradeTier: 'All (if company benefit applies)',
-    maxAmountUSD: 50,
+    category: 'Office Supplies / Equipment',
+    gradeTier: 'All (role-relevant items only)',
+    maxAmountUSD: 100,
     autoApproveLimitUSD: 50,
     receiptRequiredAboveUSD: 0,
     specialRules: [
-      'Cap of $50/month.',
+      'Must be job-relevant; personal items are NOT reimbursable.',
       'Auto-approve limit up to $50.'
     ]
   },
   {
-    category: 'Misc / Other',
+    category: 'Courier / Postage',
+    gradeTier: 'All',
+    maxAmountUSD: 50,
+    autoApproveLimitUSD: 50,
+    receiptRequiredAboveUSD: 0,
+    specialRules: [
+      'Fast-track approval for legitimate business shipping and postage.'
+    ]
+  },
+  {
+    category: 'Miscellaneous / Others',
     gradeTier: 'All',
     maxAmountUSD: 50,
     autoApproveLimitUSD: null, // Always manual review

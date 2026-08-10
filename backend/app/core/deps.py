@@ -38,12 +38,14 @@ from app.repositories.audit_repository import AuditLogRepository
 from app.repositories.claim_repository import ClaimRepository
 from app.repositories.employee_repository import EmployeeRepository
 from app.repositories.fraud_repository import FraudResultRepository
+from app.repositories.category_repository import CategoryRepository
 from app.repositories.policy_rule_repository import PolicyRuleRepository
 from app.repositories.role_repository import RoleRepository
 from app.repositories.workflow_repository import ApprovalWorkflowRepository
 from app.services.audit_service import AuditService
 from app.services.claim_service import ClaimService
 from app.services.employee_service import EmployeeService
+from app.services.category_service import CategoryService
 from app.services.policy_rule_service import PolicyRuleService
 
 # The only valid application roles (mirrors frontend/src/types.ts UserRole).
@@ -168,6 +170,10 @@ def get_policy_rule_repository(db: Session = Depends(get_db)) -> PolicyRuleRepos
     return PolicyRuleRepository(db)
 
 
+def get_category_repository(db: Session = Depends(get_db)) -> CategoryRepository:
+    return CategoryRepository(db)
+
+
 def get_audit_repository(db: Session = Depends(get_db)) -> AuditLogRepository:
     return AuditLogRepository(db)
 
@@ -261,6 +267,13 @@ def get_policy_rule_service(
     audit_service: AuditService = Depends(get_audit_service),
 ) -> PolicyRuleService:
     return PolicyRuleService(policy_rule_repository, audit_service)
+
+
+def get_category_service(
+    category_repository: CategoryRepository = Depends(get_category_repository),
+    audit_service: AuditService = Depends(get_audit_service),
+) -> CategoryService:
+    return CategoryService(category_repository, audit_service)
 
 
 def get_claim_service(
