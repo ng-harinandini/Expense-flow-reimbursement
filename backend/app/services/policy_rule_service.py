@@ -39,6 +39,26 @@ def _code_for_category(category: str) -> str:
     return f"{slug.strip('_')}_{_CODE_SUFFIX}"
 
 
+def _published_special_rules(candidate: CandidatePolicyRule) -> list[str]:
+    """Fold a candidate's exclusions and document requirements into ``special_rules``.
+
+    ``policy_rules`` has no dedicated column for either, and they are the two things a claimant
+    most needs to see. Prefixing keeps them identifiable without a schema change, and means
+    approving a candidate never drops a clause the reviewer saw.
+    """
+    merged: list[str] = [str(item) for item in (candidate.special_rules or []) if item]
+    merged += [f"Not reimbursable: {item}" for item in (candidate.exclusions or []) if item]
+    merged += [f"Required document: {item}" for item in (candidate.required_documents or []) if item]
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in merged:
+        if item.casefold() not in seen:
+            seen.add(item.casefold())
+            deduped.append(item)
+    return deduped
+
+
 def _decimal_or_none(value: Any) -> Optional[Decimal]:
     if value is None or value == "":
         return None
@@ -207,7 +227,7 @@ class PolicyRuleService:
             priority=candidate.priority,
             conditions=candidate.conditions,
             actions=candidate.actions,
-            special_rules=candidate.special_rules or [],
+            special_rules=_published_special_rules(candidate),
             # provenance
             source_document_id=candidate.document_id,
             source_page_number=candidate.source_page_number,

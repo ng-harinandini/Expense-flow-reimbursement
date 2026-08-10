@@ -150,6 +150,27 @@ class AISettings(BaseSettings):
     BEDROCK_REGION: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
 
+    # --- policy rule extraction --------------------------------------------
+    # This capability is deliberately separate from advisory LLM explanations: extraction creates
+    # reviewable candidate rules and therefore has its own provider/model switch.  Bedrock is the
+    # safe default for deployments that configure AWS credentials; Gemini remains available for
+    # compatibility with older installations.
+    RULE_EXTRACTION_PROVIDER: str = "bedrock"  # bedrock | gemini
+    # Required at runtime; keep model selection entirely in the deployment environment.
+    RULE_EXTRACTION_MODEL: Optional[str] = None
+    # Extraction emits a far richer object per rule than the advisory LLM path (conditions,
+    # actions, verbatim source text, confidence), so it needs its own, much larger output budget.
+    # Truncated JSON is unparseable and silently costs a whole page of rules.
+    RULE_EXTRACTION_MAX_OUTPUT_TOKENS: int = 8192
+    # A page is sent in windows rather than truncated, so no clause is silently dropped.
+    RULE_EXTRACTION_MAX_CHARS_PER_WINDOW: int = 9000
+    # Carried from the previous window so a rule straddling the boundary is still seen whole.
+    RULE_EXTRACTION_WINDOW_OVERLAP_CHARS: int = 800
+    # Selects a template from app/ai/extraction/prompts/ (v1, v2, ...). A prompt-wording change
+    # or regression can be rolled back — or a new version trialled — purely via this env var, with
+    # no code deploy touching the extraction pipeline itself.
+    RULE_EXTRACTION_PROMPT_VERSION: str = "v3"
+
     # --- caching (Task 15) --------------------------------------------------
     CACHE_BACKEND: Literal["memory", "redis", "none"] = "memory"
     CACHE_REDIS_URL: Optional[str] = None

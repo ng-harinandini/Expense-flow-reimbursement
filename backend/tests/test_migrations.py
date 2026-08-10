@@ -72,6 +72,10 @@ def test_revision_graph_is_complete_and_joined():
     script = ScriptDirectory.from_config(alembic_config())
     revisions = {r.revision for r in script.walk_revisions()}
     assert revisions == {
+        "0012_limit_expression_unbounded",
+        "0011_candidate_currency_nullable",
+        "0010_candidate_review_metadata",
+        "0009_candidate_policy_rules",
         "0008_multi_item_claims",
         "0007_merge_heads",
         "0006_prompt_governance",

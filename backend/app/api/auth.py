@@ -31,6 +31,7 @@ import json
 from typing import Optional
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -60,7 +61,15 @@ _logout_bearer = HTTPBearer(auto_error=False)
 
 def _cognito_client():
     """boto3 Cognito IDP client in the resolved region (credentials via the standard chain)."""
-    return boto3.client("cognito-idp", region_name=settings.cognito_region)
+    return boto3.client(
+        "cognito-idp",
+        region_name=settings.cognito_region,
+        config=Config(
+            connect_timeout=10,
+            read_timeout=30,
+            retries={"max_attempts": 2, "mode": "standard"},
+        ),
+    )
 
 
 def _secret_hash(username: str) -> Optional[str]:

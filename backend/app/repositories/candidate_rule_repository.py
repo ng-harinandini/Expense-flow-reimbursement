@@ -1,4 +1,4 @@
-"""Persistence for candidate policy rules extracted by Gemini."""
+"""Persistence for AI-extracted candidate policy rules."""
 
 from __future__ import annotations
 
