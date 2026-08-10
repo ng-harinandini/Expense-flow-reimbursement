@@ -66,7 +66,7 @@ logger = get_logger(__name__)
 FRAUD_ROUTING_THRESHOLD = 40
 
 #: Categories whose claims require an attendee listing.
-ATTENDEE_REQUIRED_CATEGORIES = frozenset({"Client Entertainment"})
+ATTENDEE_REQUIRED_CATEGORIES = frozenset({"Client / Business Entertainment"})
 
 CLAIM_ACTIONS = frozenset({"APPROVE", "REJECT", "FLAG_FRAUD"})
 
@@ -507,7 +507,7 @@ class ClaimService:
             self._coerce_date(resolve("expenseDate", extracted_key="transactionDate"))
             or date.today()
         )
-        category = (payload.get("category") or "Misc / Other").strip()
+        category = (payload.get("category") or "Miscellaneous / Others").strip()
         attendees = validators.validate_attendees(
             payload.get("attendees"), required=category in ATTENDEE_REQUIRED_CATEGORIES
         )

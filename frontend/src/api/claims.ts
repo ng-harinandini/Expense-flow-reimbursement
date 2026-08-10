@@ -125,7 +125,7 @@ interface ClaimApiShape {
 function mapClaim(raw: ClaimApiShape): Claim {
   const items: ClaimExpenseItem[] = (raw.items ?? []).map((i) => ({
     id: i.id,
-    category: (i.category ?? "Misc / Other") as ClaimExpenseItem["category"],
+    category: (i.category ?? "Miscellaneous / Others") as ClaimExpenseItem["category"],
     merchantVendor: i.merchantVendor ?? "",
     expenseDate: i.expenseDate ?? "",
     description: i.purposeDescription ?? "",

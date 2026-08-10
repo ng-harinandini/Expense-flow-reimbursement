@@ -66,15 +66,21 @@ def test_revision_graph_is_complete_and_joined():
     test, which is how a reviewer is forced to notice a new migration and confirm its place.
 
     The chain is not linear. ``0003_seed_reference_data`` forked into a core-domain line and an
-    AI-platform line, which ``0007_merge_heads`` rejoins — so this asserts set membership plus the
-    two edges that define the fork, rather than a single ordered walk.
+    AI-platform line, which ``0007_merge_heads`` rejoins. ``0009_candidate_policy_rules`` forked the
+    same way into a claim line and a candidate-policy line, which ``0013_merge_heads`` rejoins — so
+    this asserts set membership plus the edges that define each fork, rather than a single ordered
+    walk.
     """
     script = ScriptDirectory.from_config(alembic_config())
     revisions = {r.revision for r in script.walk_revisions()}
     assert revisions == {
+        "0013_merge_heads",
         "0012_limit_expression_unbounded",
+        "0012_category_custom_fields",
         "0011_candidate_currency_nullable",
+        "0011_retire_disburse_action",
         "0010_candidate_review_metadata",
+        "0010_claim_withdrawal",
         "0009_candidate_policy_rules",
         "0008_multi_item_claims",
         "0007_merge_heads",
@@ -95,6 +101,17 @@ def test_revision_graph_is_complete_and_joined():
     # The join: the merge revision has exactly the two branch tips as parents.
     merge = script.get_revision("0007_merge_heads")
     assert set(merge.down_revision) == {"0005_drop_departments", "0006_prompt_governance"}
+
+    # The second fork: both 0010s descend from the same candidate-policy revision.
+    for forked in ("0010_claim_withdrawal", "0010_candidate_review_metadata"):
+        assert script.get_revision(forked).down_revision == "0009_candidate_policy_rules"
+
+    # The second join: the merge revision has exactly the two branch tips as parents.
+    merge_2 = script.get_revision("0013_merge_heads")
+    assert set(merge_2.down_revision) == {
+        "0012_category_custom_fields",
+        "0012_limit_expression_unbounded",
+    }
 
 
 def test_every_revision_defines_a_downgrade():
@@ -263,10 +280,10 @@ def test_all_five_policy_categories_seeded(db_engine):
         }
     assert {
         "Meals",
-        "Ground Transport",
-        "Flights",
-        "Lodging",
-        "Client Entertainment",
+        "Taxi / Cab / Ride-hailing",
+        "Air Travel",
+        "Hotel / Lodging",
+        "Client / Business Entertainment",
     } <= categories
 
 
@@ -281,7 +298,7 @@ def test_expense_categories_match_policy_rule_categories(db_engine):
         seeded = {
             row[0]
             for row in connection.execute(
-                text("SELECT name FROM expense_categories WHERE is_active")
+                text("SELECT name FROM expense_categories WHERE is_active AND NOT is_common")
             )
         }
         policy = {
@@ -292,12 +309,17 @@ def test_expense_categories_match_policy_rule_categories(db_engine):
         }
     assert {
         "Meals",
-        "Ground Transport",
-        "Flights",
-        "Lodging",
-        "Client Entertainment",
+        "Taxi / Cab / Ride-hailing",
+        "Air Travel",
+        "Hotel / Lodging",
+        "Client / Business Entertainment",
     } <= seeded
-    assert seeded <= policy, f"categories with no policy rule: {seeded - policy}"
+    # Only the five categories with bespoke policy_engine branches carry a seeded policy_rules row
+    # (see app.services.policy_engine's module docstring); the other ten fall through to that
+    # engine's generic else-branch default. So the invariant is narrower post-0012: every *seeded
+    # policy rule's* category must still resolve to a real, active expense_categories row — not
+    # the reverse.
+    assert policy <= seeded, f"policy rules with no matching category: {policy - seeded}"
 
 
 def test_seed_ids_are_deterministic():

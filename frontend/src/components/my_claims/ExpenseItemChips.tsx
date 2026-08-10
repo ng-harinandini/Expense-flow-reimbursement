@@ -11,12 +11,12 @@ import { STATUS_LABELS } from "./status";
 
 /** Dot colour per category, so a chip is scannable before its text is read. */
 const CATEGORY_DOT_CLASSES: Record<string, string> = {
-  Flights: "bg-amber-500",
+  "Air Travel": "bg-amber-500",
   Lodging: "bg-emerald-500",
   Meals: "bg-emerald-500",
-  "Ground Transport": "bg-amber-500",
-  "Client Entertainment": "bg-emerald-500",
-  "Software & Subscriptions": "bg-blue-500",
+  "Taxi / Cab / Ride-hailing": "bg-amber-500",
+  "Client / Business Entertainment": "bg-emerald-500",
+  "Software / Subscriptions": "bg-blue-500",
 };
 
 const FALLBACK_DOT_CLASS = "bg-muted-foreground";

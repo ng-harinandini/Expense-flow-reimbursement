@@ -1,4 +1,4 @@
-from typing import Annotated, Any, Dict, List, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from datetime import date
 from decimal import Decimal
 
@@ -127,7 +127,7 @@ class ExpenseItemCreateSchema(BaseModel):
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
-    category: Optional[str] = Field(default="Misc / Other", max_length=64)
+    category: Optional[str] = Field(default="Miscellaneous / Others", max_length=64)
     subCategory: Optional[str] = Field(default="General Expense", max_length=120)
     amount: Optional[MoneyAmount] = None
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
@@ -511,6 +511,53 @@ class PolicyRuleDefinitionSchema(BaseModel):
     isActive: Optional[bool] = None
     effectiveDate: Optional[str] = None
     expirationDate: Optional[str] = None
+
+class CategoryFieldDefinitionSchema(BaseModel):
+    """One entry of ``expense_categories.custom_fields`` — the extraction schema for a category.
+
+    ``name`` is the snake_case machine key later used as the key extraction writes into
+    ``expense_items.ocr_extracted_json``; ``options`` only makes sense (and is only meaningful)
+    when ``data_type == "enum"``, but is not enforced non-empty here since draft rows may be saved
+    mid-edit — the frontend form is what actually requires it before submit.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=120)
+    description: Optional[str] = None
+    data_type: Literal["text", "number", "date", "boolean", "enum"] = "text"
+    options: Optional[List[str]] = None
+    required: bool = False
+
+
+class ExpenseCategorySchema(BaseModel):
+    """``expense_categories`` row, as ``GET /categories`` returns it."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    id: Optional[str] = None
+    code: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=64)
+    description: Optional[str] = None
+    displayOrder: int = Field(default=100, ge=0)
+    isActive: bool = True
+    isCommon: bool = False
+    customFields: List[CategoryFieldDefinitionSchema] = Field(default_factory=list)
+
+
+class ExpenseCategoryWriteSchema(BaseModel):
+    """Create/update payload for ``POST``/``PUT /categories``."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    code: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=64)
+    description: Optional[str] = None
+    displayOrder: int = Field(default=100, ge=0)
+    isActive: bool = True
+    customFields: List[CategoryFieldDefinitionSchema] = Field(default_factory=list)
+
 
 class AuditLogEntrySchema(BaseModel):
     id: str

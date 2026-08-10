@@ -73,7 +73,7 @@ export function formValuesToPolicyRule(
 const MOCK_EXTRACTION_POOL: PolicyRuleFormValues[][] = [
   [
     {
-      category: "Software & Subscriptions",
+      category: "Software / Subscriptions",
       gradeApplicable: "All (role-relevant tools only)",
       maxAmount: 300,
       maxAmountUnit: "year",
@@ -82,19 +82,19 @@ const MOCK_EXTRACTION_POOL: PolicyRuleFormValues[][] = [
       effectiveFrom: "2026-01-01",
     },
     {
-      category: "Team Events",
-      gradeApplicable: "Manager+",
-      maxAmount: 300,
-      maxAmountUnit: "event",
-      autoApproveLimit: undefined,
+      category: "Parking & Tolls",
+      gradeApplicable: "All",
+      maxAmount: 50,
+      maxAmountUnit: "day",
+      autoApproveLimit: 50,
       requiresReceiptAbove: 0,
       effectiveFrom: "2026-01-01",
     },
     {
-      category: "Health & Wellness",
+      category: "Courier / Postage",
       gradeApplicable: "All",
       maxAmount: 50,
-      maxAmountUnit: "month",
+      maxAmountUnit: "event",
       autoApproveLimit: 50,
       requiresReceiptAbove: 0,
       effectiveFrom: "2026-01-01",
@@ -102,7 +102,7 @@ const MOCK_EXTRACTION_POOL: PolicyRuleFormValues[][] = [
   ],
   [
     {
-      category: "Training & Professional Dev",
+      category: "Training / Certification / Conference",
       gradeApplicable: "All (with manager pre-approval)",
       maxAmount: 2000,
       maxAmountUnit: "year",
@@ -111,7 +111,7 @@ const MOCK_EXTRACTION_POOL: PolicyRuleFormValues[][] = [
       effectiveFrom: "2026-01-01",
     },
     {
-      category: "Communications & Connectivity",
+      category: "Communication",
       gradeApplicable: "All / Remote roles",
       maxAmount: 50,
       maxAmountUnit: "month",

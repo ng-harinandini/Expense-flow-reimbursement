@@ -14,7 +14,7 @@ export const INITIAL_POLICY_RULES: AdminPolicyRule[] = [
   },
   {
     id: 2,
-    category: "Ground Transport",
+    category: "Taxi / Cab / Ride-hailing",
     gradeApplicable: "All",
     maxAmount: 150,
     maxAmountUnit: "trip",
@@ -24,7 +24,7 @@ export const INITIAL_POLICY_RULES: AdminPolicyRule[] = [
   },
   {
     id: 3,
-    category: "Lodging",
+    category: "Hotel / Lodging",
     gradeApplicable: "L1-L3",
     maxAmount: 120,
     maxAmountUnit: "night",
@@ -34,7 +34,7 @@ export const INITIAL_POLICY_RULES: AdminPolicyRule[] = [
   },
   {
     id: 4,
-    category: "Lodging",
+    category: "Hotel / Lodging",
     gradeApplicable: "L4+",
     maxAmount: 250,
     maxAmountUnit: "night",
@@ -44,7 +44,7 @@ export const INITIAL_POLICY_RULES: AdminPolicyRule[] = [
   },
   {
     id: 5,
-    category: "Client Entertainment",
+    category: "Client / Business Entertainment",
     gradeApplicable: "Manager+",
     maxAmount: 500,
     maxAmountUnit: "event",

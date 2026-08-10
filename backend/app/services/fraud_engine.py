@@ -1,3 +1,9 @@
+"""Anomaly/fraud screening heuristics.
+
+Category names match the fifteen-category vocabulary from migration ``0012_category_custom_fields``
+(see :mod:`app.models.category` / :mod:`app.services.policy_engine`), not the original five.
+"""
+
 from typing import Dict, Any, List
 
 def screen_for_anomalies(
@@ -11,7 +17,7 @@ def screen_for_anomalies(
     amount = float(current_claim.get("amountUSD") or current_claim.get("amount") or 0.0)
     date = str(current_claim.get("expenseDate") or "")
     emp_id = str(current_claim.get("employeeId") or "")
-    category = str(current_claim.get("category") or "Misc / Other")
+    category = str(current_claim.get("category") or "Miscellaneous / Others")
 
     # 1. Check for Duplicate Submissions
     duplicate = next(
@@ -49,7 +55,7 @@ def screen_for_anomalies(
         previous_total = sum(float(c.get("amountUSD", 0.0)) for c in same_day_claims)
         combined_total = previous_total + amount
 
-        if category == "Ground Transport" and combined_total > 50.0:
+        if category == "Taxi / Cab / Ride-hailing" and combined_total > 50.0:
             risk_score += 35
             flags.append({
                 "code": "SPLIT_TRANSACTION",

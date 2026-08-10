@@ -18,6 +18,7 @@ from decimal import Decimal
 from typing import Any, Optional, Sequence
 
 from app.models.audit import AuditLog
+from app.models.category import ExpenseCategory
 from app.models.claim import Attachment, Claim, ClaimStatusHistory, Comment
 from app.models.expense_item import ExpenseItem
 from app.models.fraud import FraudResult
@@ -384,3 +385,19 @@ def policy_rule_to_dict(rule: PolicyRule) -> dict[str, Any]:
 def policy_rules_to_engine_input(rules: Sequence[PolicyRule]) -> list[dict[str, Any]]:
     """Rules in the shape ``policy_engine.evaluate_expense_policy`` expects."""
     return [policy_rule_to_dict(rule) for rule in rules]
+
+
+# --- categories ----------------------------------------------------------------
+
+def category_to_dict(category: ExpenseCategory) -> dict[str, Any]:
+    """One ``expense_categories`` row as ``ExpenseCategorySchema`` — the ``GET /categories`` shape."""
+    return {
+        "id": str(category.id),
+        "code": category.code,
+        "name": category.name,
+        "description": category.description,
+        "displayOrder": category.display_order,
+        "isActive": category.is_active,
+        "isCommon": category.is_common,
+        "customFields": category.custom_fields or [],
+    }

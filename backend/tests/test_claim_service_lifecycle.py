@@ -133,7 +133,7 @@ def test_policy_violation_routes_to_manager_review(claim_service, claim_payload,
 
 def test_flights_never_auto_approve(claim_service, claim_payload, employee_actor):
     claim = claim_service.submit_claim(
-        claim_payload(category="Flights", amount=Decimal("640.00"),
+        claim_payload(category="Air Travel", amount=Decimal("640.00"),
                       amountUSD=Decimal("640.00")),
         actor=employee_actor,
     )
@@ -160,12 +160,12 @@ def test_high_risk_claim_routes_to_fraud_investigation(
     when = date.today() - timedelta(days=1)
     vendor = "Uber SF Airport"
     claim_service.submit_claim(
-        claim_payload(category="Ground Transport", vendor=vendor, merchantVendor=vendor,
+        claim_payload(category="Taxi / Cab / Ride-hailing", vendor=vendor, merchantVendor=vendor,
                       amount=Decimal("49.95"), amountUSD=Decimal("49.95"), expenseDate=when),
         actor=employee_actor,
     )
     second = claim_service.submit_claim(
-        claim_payload(category="Ground Transport", merchantVendor=vendor,
+        claim_payload(category="Taxi / Cab / Ride-hailing", merchantVendor=vendor,
                       amount=Decimal("48.00"), amountUSD=Decimal("48.00"), expenseDate=when),
         actor=employee_actor,
     )
@@ -253,7 +253,7 @@ def test_invalid_currency_rejected(claim_service, claim_payload, employee_actor)
 def test_client_entertainment_requires_attendees(claim_service, claim_payload, employee_actor):
     with pytest.raises(ValidationError, match="attendees"):
         claim_service.submit_claim(
-            claim_payload(category="Client Entertainment", amount=Decimal("300.00"),
+            claim_payload(category="Client / Business Entertainment", amount=Decimal("300.00"),
                           amountUSD=Decimal("300.00"), attendees=None),
             actor=employee_actor,
         )
@@ -381,7 +381,7 @@ def test_one_policy_hold_sends_the_whole_claim_to_manager_review(
         claim_payload(
             extra_items=[
                 claim_payload.item(
-                    category="Client Entertainment",
+                    category="Client / Business Entertainment",
                     amount=Decimal("900.00"),
                     amountUSD=Decimal("900.00"),
                     attendees="Client A, Client B",
@@ -416,13 +416,13 @@ def test_claim_resolves_only_after_every_item_is_decided(
     """Per-item decisions roll up: the claim moves once nothing is pending."""
     claim = claim_service.submit_claim(
         claim_payload(
-            category="Client Entertainment",
+            category="Client / Business Entertainment",
             amount=Decimal("900.00"),
             amountUSD=Decimal("900.00"),
             attendees="Client A",
             extra_items=[
                 claim_payload.item(
-                    category="Client Entertainment",
+                    category="Client / Business Entertainment",
                     amount=Decimal("950.00"),
                     amountUSD=Decimal("950.00"),
                     attendees="Client B",
@@ -452,7 +452,7 @@ def test_claim_is_rejected_when_every_item_is_rejected(
 ):
     claim = claim_service.submit_claim(
         claim_payload(
-            category="Client Entertainment",
+            category="Client / Business Entertainment",
             amount=Decimal("900.00"),
             amountUSD=Decimal("900.00"),
             attendees="Client A",
@@ -471,7 +471,7 @@ def test_rejecting_an_item_requires_a_reason(
 ):
     claim = claim_service.submit_claim(
         claim_payload(
-            category="Client Entertainment",
+            category="Client / Business Entertainment",
             amount=Decimal("900.00"),
             amountUSD=Decimal("900.00"),
             attendees="Client A",

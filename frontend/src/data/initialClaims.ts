@@ -183,7 +183,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
     department: 'Product Development',
     expenseDate: '2026-07-18',
     submissionDate: '2026-07-21',
-    category: 'Lodging',
+    category: 'Hotel / Lodging',
     subCategory: 'Hotel Stay - Client Visit',
     amount: 180.00,
     currency: 'USD',
@@ -220,7 +220,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
         {
           ruleId: 'LODGING_GRADE_LIMIT',
           ruleName: 'Grade L4 Lodging Max ($250/night)',
-          category: 'Lodging',
+          category: 'Hotel / Lodging',
           passed: true,
           severity: 'INFO',
           message: 'Amount $180.00 is within grade L4 lodging limit ($250.00).'
@@ -228,7 +228,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
         {
           ruleId: 'LODGING_ALWAYS_MANUAL',
           ruleName: 'Lodging Manual Review Requirement',
-          category: 'Lodging',
+          category: 'Hotel / Lodging',
           passed: false,
           severity: 'REQUIREMENT',
           message: 'Lodging expenses ALWAYS require manual manager review per section 4.4.'
@@ -276,7 +276,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
     department: 'Engineering',
     expenseDate: '2026-07-19',
     submissionDate: '2026-07-23',
-    category: 'Ground Transport',
+    category: 'Taxi / Cab / Ride-hailing',
     subCategory: 'Taxi / Rideshare',
     amount: 48.50,
     currency: 'USD',
@@ -309,7 +309,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
         {
           ruleId: 'TAXI_AUTO_APPROVE',
           ruleName: 'Rideshare Limit',
-          category: 'Ground Transport',
+          category: 'Taxi / Cab / Ride-hailing',
           passed: true,
           severity: 'INFO',
           message: '$48.50 is under $50 auto-approve threshold.'
@@ -378,7 +378,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
     department: 'Engineering Lead',
     expenseDate: '2026-07-15',
     submissionDate: '2026-07-20',
-    category: 'Client Entertainment',
+    category: 'Client / Business Entertainment',
     subCategory: 'Client Dinner',
     amount: 340.00,
     currency: 'USD',
@@ -420,7 +420,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
         {
           ruleId: 'CLIENT_ENT_GRADE',
           ruleName: 'Manager+ Grade Requirement',
-          category: 'Client Entertainment',
+          category: 'Client / Business Entertainment',
           passed: true,
           severity: 'INFO',
           message: 'Employee grade L5 meets Manager+ requirement.'
@@ -428,7 +428,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
         {
           ruleId: 'CLIENT_ENT_MAX',
           ruleName: 'Event Maximum ($500)',
-          category: 'Client Entertainment',
+          category: 'Client / Business Entertainment',
           passed: true,
           severity: 'INFO',
           message: 'Amount $340.00 is under $500 event cap.'
@@ -436,7 +436,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
         {
           ruleId: 'ALCOHOL_CAP_CHECK',
           ruleName: 'Alcohol 2 Drink / Person Cap',
-          category: 'Client Entertainment',
+          category: 'Client / Business Entertainment',
           passed: true,
           severity: 'INFO',
           message: '3 drinks split among 3 attendees (1.0 drink/person) is within 2 drink cap.'
@@ -444,7 +444,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
         {
           ruleId: 'ATTENDEE_LIST_CHECK',
           ruleName: 'Attendee Listing Requirement',
-          category: 'Client Entertainment',
+          category: 'Client / Business Entertainment',
           passed: true,
           severity: 'INFO',
           message: 'All 3 internal and external attendees listed in documentation.'
@@ -490,7 +490,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
     department: 'Engineering',
     expenseDate: '2026-03-10', // 135 days old
     submissionDate: '2026-07-23',
-    category: 'Software & Subscriptions',
+    category: 'Software / Subscriptions',
     subCategory: 'Developer Utility Tool',
     amount: 120.00,
     currency: 'USD',
@@ -523,7 +523,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
         {
           ruleId: 'EXPIRED_SUBMISSION_WINDOW',
           ruleName: '90-Day Submission Limit',
-          category: 'Software & Subscriptions',
+          category: 'Software / Subscriptions',
           passed: false,
           severity: 'VIOLATION',
           message: 'Claim submitted 135 days after expense date. Exceeds mandatory 90-day window per Section 2.'
@@ -531,7 +531,7 @@ export const INITIAL_CLAIMS: ExpenseClaim[] = [
         {
           ruleId: 'REQUIRES_FINANCE_DIRECTOR_SIGN_OFF',
           ruleName: 'Finance Director Special Escalation',
-          category: 'Software & Subscriptions',
+          category: 'Software / Subscriptions',
           passed: false,
           severity: 'REQUIREMENT',
           message: 'Claims submitted after 90 days REQUIRE Finance Director written approval and justification.'
