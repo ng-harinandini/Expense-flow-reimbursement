@@ -1,3 +1,5 @@
+import { axiosInstance } from "@/lib/axios";
+
 import { apiUpload } from "./client";
 
 export interface ReceiptExtraction {
@@ -40,4 +42,29 @@ export function uploadReceipt(
   return apiUpload<ReceiptExtraction>("/expense-items/upload", formData, {
     signal: options.signal,
   });
+}
+
+/** Query key for {@link downloadReceipt}, so callers invalidate/cache consistently. */
+export const receiptQueryKey = (fileUrl: string | null | undefined) =>
+  ["expense-item-receipt", fileUrl] as const;
+
+/**
+ * Fetches a receipt document as a Blob.
+ *
+ * The S3 bucket is private, so `fileUrl` can't be used as an `<img>`/`<iframe>` src directly.
+ * The URL is sent to the API, which authorizes the caller against the owning claim and streams
+ * the bytes back. Uses the shared axios instance so the bearer token interceptor applies.
+ */
+export async function downloadReceipt(
+  fileUrl: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<Blob> {
+  const response = await axiosInstance.request<Blob>({
+    url: "/expense-items/receipt",
+    method: "GET",
+    params: { fileUrl },
+    responseType: "blob",
+    signal: options.signal,
+  });
+  return response.data;
 }

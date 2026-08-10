@@ -73,8 +73,7 @@ def test_coerce_rejects_unknown_status():
         (S.MANAGER_REVIEW, S.APPROVED),
         (S.MANAGER_REVIEW, S.REJECTED),
         (S.FINANCE_REVIEW, S.APPROVED),
-        (S.APPROVED, S.REIMBURSED),
-        (S.AUTO_APPROVED, S.REIMBURSED),
+        (S.APPROVED, S.FLAGGED_FRAUD),
         (S.FLAGGED_FRAUD, S.REJECTED),
         (S.FLAGGED_FRAUD, S.MANAGER_REVIEW),
     ],
@@ -93,6 +92,8 @@ def test_legal_transitions(current, target):
         (S.PROCESSING, S.REIMBURSED),   # no payout without a decision
         (S.PROCESSING, S.REJECTED),     # rejection is a human act
         (S.MANAGER_REVIEW, S.REIMBURSED),
+        (S.APPROVED, S.REIMBURSED),     # retired: Approve is now the final reviewer step
+        (S.AUTO_APPROVED, S.REIMBURSED),
         (S.REJECTED, S.APPROVED),       # terminal
         (S.REJECTED, S.SUBMITTED),
         (S.REIMBURSED, S.REJECTED),     # terminal

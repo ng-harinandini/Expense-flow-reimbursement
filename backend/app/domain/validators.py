@@ -28,6 +28,7 @@ from app.domain.errors import (
     ValidationError,
 )
 from app.models.claim import Claim
+from app.models.enums import ClaimStatus
 from app.models.expense_item import ExpenseItem
 from app.models.organization import Employee
 from app.services import receipt_extraction
@@ -57,6 +58,36 @@ def require_employee(employee: Optional[Employee], identifier: str = "") -> Empl
             details={"employeeId": employee.employee_code},
         )
     return employee
+
+
+def require_reporting_manager(employee: Employee) -> Employee:
+    """The submitting employee must have a reporting manager.
+
+    Every claim's first approval step is the employee's manager, so a submission from someone with
+    no ``manager_id`` would be routed to nobody: the claim would land in ``Manager_Review`` with no
+    assigned reviewer and sit there until an admin noticed. Refusing the submission up front turns
+    a silently stuck claim into an actionable error the employee can take to HR/admin.
+    """
+    manager = employee.manager
+    if manager is None:
+        raise ValidationError(
+            "You have no reporting manager assigned, so this claim cannot be sent for approval. "
+            "Contact your administrator to set one.",
+            code="no_reporting_manager",
+            details={"employeeId": employee.employee_code, "field": "managerId"},
+        )
+    if not manager.is_active:
+        raise ValidationError(
+            f"Your reporting manager ({manager.full_name}) is deactivated, so this claim cannot "
+            "be sent for approval. Contact your administrator to assign an active manager.",
+            code="inactive_reporting_manager",
+            details={
+                "employeeId": employee.employee_code,
+                "managerId": manager.employee_code,
+                "field": "managerId",
+            },
+        )
+    return manager
 
 
 def require_claim(claim: Optional[Claim], identifier: str) -> Claim:
@@ -116,6 +147,31 @@ def require_editable(claim: Claim) -> None:
                 "editableStatuses": sorted(s.value for s in fsm.EDITABLE_STATUSES),
             },
         )
+
+
+def require_withdrawable(claim: Claim) -> None:
+    """A claim may only be withdrawn by its owner before a payout decision is final.
+    """
+    if claim.status in fsm.WITHDRAWABLE_STATUSES:
+        return
+
+    if claim.status == ClaimStatus.FLAGGED_FRAUD:
+        raise ForbiddenError(
+            f"Claim {claim.claim_number} is under fraud investigation and cannot be withdrawn.",
+            details={
+                "claimNumber": claim.claim_number,
+                "currentStatus": claim.status.value,
+            },
+        )
+
+    raise ImmutableEntityError(
+        f"Claim {claim.claim_number} is '{claim.status.value}' and can no longer be withdrawn.",
+        details={
+            "claimNumber": claim.claim_number,
+            "currentStatus": claim.status.value,
+            "withdrawableStatuses": sorted(s.value for s in fsm.WITHDRAWABLE_STATUSES),
+        },
+    )
 
 
 def require_not_terminal(claim: Claim) -> None:

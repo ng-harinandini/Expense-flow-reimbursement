@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { yupResolver } from "@hookform/resolvers/yup";
 import { FileText } from "lucide-react";
@@ -15,6 +16,7 @@ import {
 } from "@/components/ui/card";
 import { createClaim } from "@/api/claims";
 import { getErrorMessage } from "@/lib/apiError";
+import { useToast } from "@/components/ui/toast";
 import { AddExpenseItemDialog } from "@/components/submit_expense/AddExpenseItemDialog";
 import { ExpenseItemsSection } from "@/components/submit_expense/ExpenseItemsSection";
 import { ClaimDetailsCard } from "@/components/submit_expense/ClaimDetailsCard";
@@ -26,6 +28,8 @@ import {
 import type { ExpenseItemDraft } from "@/components/submit_expense/helpers";
 
 export default function SubmitExpense() {
+  const router = useRouter();
+  const toast = useToast();
   const claimForm = useForm<ClaimFormValues>({
     resolver: yupResolver(claimSchema),
     defaultValues: CLAIM_FORM_DEFAULTS,
@@ -36,9 +40,7 @@ export default function SubmitExpense() {
   const [items, setItems] = React.useState<ExpenseItemDraft[]>([]);
   const [isDialogOpen, setIsDialogOpen] = React.useState(false);
   const [editingItem, setEditingItem] = React.useState<ExpenseItemDraft | null>(null);
-  const [raiseClaimError, setRaiseClaimError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
-  const [submittedClaimNumber, setSubmittedClaimNumber] = React.useState<string | null>(null);
 
   const handleAddClick = async () => {
     // Claim fields must be valid before an item can be tied to this claim.
@@ -62,53 +64,46 @@ export default function SubmitExpense() {
       const exists = current.some((i) => i.id === item.id);
       return exists ? current.map((i) => (i.id === item.id ? item : i)) : [...current, item];
     });
-    setRaiseClaimError(null);
   };
 
   const handleRaiseClaim = async () => {
     const claimValid = await trigger();
     if (!claimValid) {
-      setRaiseClaimError("Fix the claim details above before raising the claim.");
+      toast({ message: "Fix the claim details above before raising the claim.", type: "error" });
       return;
     }
     if (items.length === 0) {
-      setRaiseClaimError("Add at least one expense item before raising a claim.");
+      toast({ message: "Add at least one expense item before raising a claim.", type: "error" });
       return;
     }
 
-    setRaiseClaimError(null);
     setIsSubmitting(true);
 
     try {
       const result = await createClaim(getValues(), items);
-      setSubmittedClaimNumber(result.claimNumber);
+
+      if (!result?.id) {
+        toast({
+          message: "The claim could not be confirmed. Please try again.",
+          type: "error",
+        });
+        setIsSubmitting(false);
+        return;
+      }
+
+      toast({ message: "Claim raised successfully.", type: "success" });
       claimForm.reset();
       setItems([]);
+      router.push("/my-claims");
     } catch (error) {
-      setRaiseClaimError(getErrorMessage(error, "Failed to submit the claim. Please try again."));
-    } finally {
+      const message = getErrorMessage(error, "Failed to submit the claim. Please try again.");
+      toast({ message, type: "error" });
       setIsSubmitting(false);
     }
   };
 
   return (
     <>
-      {submittedClaimNumber && (
-        <div className="mb-4 flex items-start gap-3 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm text-primary">
-          <FileText className="mt-0.5 size-4 shrink-0" />
-          <span>
-            Claim <span className="font-semibold">{submittedClaimNumber}</span> submitted
-            successfully.{" "}
-            <button
-              type="button"
-              className="underline underline-offset-2 hover:opacity-70"
-              onClick={() => setSubmittedClaimNumber(null)}
-            >
-              Submit another
-            </button>
-          </span>
-        </div>
-      )}
       <Card className="gap-4 py-4">
         {/* CardHeader defaults to a two-row grid (title row / description row)
             for the case where they're separate children. Title and
@@ -151,7 +146,6 @@ export default function SubmitExpense() {
             onEdit={handleEditItem}
             onDelete={handleDeleteItem}
             onRaiseClaim={handleRaiseClaim}
-            raiseClaimError={raiseClaimError}
             isSubmitting={isSubmitting}
           />
         </CardContent>

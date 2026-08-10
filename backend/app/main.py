@@ -44,10 +44,10 @@ app = FastAPI(
 # Correlation ids + access logging. Added before CORS so it wraps the whole stack.
 app.add_middleware(RequestContextMiddleware)
 
-# CORS Middleware configuration
+# CORS: origins come from the comma-separated FE_URL env var. `allow_credentials=True`
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

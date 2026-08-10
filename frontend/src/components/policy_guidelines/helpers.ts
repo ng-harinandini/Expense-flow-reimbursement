@@ -1,5 +1,16 @@
+import { EMPLOYEE_GRADES } from "@/components/organisation/helpers";
 import type { AdminPolicyRule } from "@/types";
 import type { PolicyRuleFormValues } from "./policyRuleSchema";
+
+
+export const POLICY_RULE_GRADES: string[] = [
+  "All",
+  ...EMPLOYEE_GRADES,
+  "Manager+",
+];
+
+/** Units a rule's max amount can be expressed per, drawn from the existing ruleset. */
+export const POLICY_RULE_UNITS: string[] = ["day", "night", "trip", "event", "month", "year"];
 
 /** Next free sequential id, based on the highest id currently in use. */
 export function nextRuleId(rules: AdminPolicyRule[]) {
@@ -42,10 +53,12 @@ export function policyRuleToFormValues(rule: AdminPolicyRule): PolicyRuleFormVal
 
 export function formValuesToPolicyRule(
   id: number,
-  values: PolicyRuleFormValues
+  values: PolicyRuleFormValues,
+  code?: string
 ): AdminPolicyRule {
   return {
     id,
+    code,
     category: values.category as AdminPolicyRule["category"],
     gradeApplicable: values.gradeApplicable,
     maxAmount: values.maxAmount,

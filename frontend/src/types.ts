@@ -54,7 +54,16 @@ export type ClaimStatus =
   | 'Approved'
   | 'Rejected'
   | 'Disbursed'
-  | 'Flagged_Fraud';
+  | 'Flagged_Fraud'
+  | 'Withdrawn';
+
+export type ExpenseItemStatus =
+  | 'Submitted'
+  | 'Auto_Approved'
+  | 'Policy_Hold'
+  | 'Fraud_Flag'
+  | 'Manager_Approved'
+  | 'Rejected';
 
 export interface ReceiptData {
   fileName?: string;
@@ -188,6 +197,7 @@ export interface ClaimExpenseItem {
   amount: number;
   currency: string;
   receiptUrl: string;
+  status: ExpenseItemStatus;
 }
 
 /** A claim raised for a trip/purchase, grouping one or more expense items. */
@@ -200,8 +210,11 @@ export interface Claim {
   fromDate: string;
   toDate: string;
   status: ClaimStatus;
+  totalAmount: number;
   items: ClaimExpenseItem[];
   workflowHistory: WorkflowStepLog[];
+  withdrawnAt?: string | null;
+  withdrawalReason?: string | null;
 }
 
 export interface PolicyRuleDefinition {
@@ -216,6 +229,7 @@ export interface PolicyRuleDefinition {
 /** A single admin-managed policy rule row, shown on the Policy Guidelines page. */
 export interface AdminPolicyRule {
   id: number;
+  code?: string;
   category: ExpenseCategory;
   gradeApplicable: string; // e.g. 'All', 'L1-L3', 'L4+', 'Manager+'
   maxAmount: number;

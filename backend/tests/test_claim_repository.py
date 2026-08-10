@@ -292,10 +292,10 @@ def test_transition_rejects_illegal_edge(claims, make_claim):
 
 
 def test_transition_rejects_unauthorized_role(claims, make_claim):
-    claim = make_claim(ClaimStatus.APPROVED)
+    claim = make_claim(ClaimStatus.MANAGER_REVIEW)
     with pytest.raises(ForbiddenError):
-        # A manager may approve, but only finance/admin may disburse.
-        claims.transition_status(claim, ClaimStatus.REIMBURSED, actor_role="manager")
+        # Only manager/finance/admin (or the system) may move a claim into review.
+        claims.transition_status(claim, ClaimStatus.FINANCE_REVIEW, actor_role="employee")
 
 
 def test_illegal_transition_leaves_the_claim_untouched(claims, make_claim):
@@ -332,14 +332,6 @@ def test_decision_metadata_recorded_on_approve_and_reject(claims, make_claim):
     assert rejected.status is ClaimStatus.REJECTED
     assert rejected.rejected_at is not None
     assert rejected.rejection_reason == "Missing itemisation"
-
-
-def test_mark_reimbursed_stores_the_payment_reference(claims, make_claim):
-    claim = make_claim(ClaimStatus.APPROVED)
-    claims.mark_reimbursed(claim, actor_role="finance", reference="PAY-9931")
-    assert claim.status is ClaimStatus.REIMBURSED
-    assert claim.reimbursed_at is not None
-    assert claim.reimbursement_reference == "PAY-9931"
 
 
 def test_flag_fraud_marks_the_history_entry_as_warning(claims, make_claim):

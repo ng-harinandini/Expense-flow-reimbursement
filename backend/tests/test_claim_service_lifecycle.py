@@ -523,42 +523,55 @@ def test_rejection_is_terminal(claim_service, make_claim, manager_actor):
         claim_service.execute_action(claim.claim_number, action="APPROVE", actor=manager_actor)
 
 
-def test_finance_can_disburse_an_approved_claim(claim_service, make_claim, finance_actor):
-    claim = make_claim(ClaimStatus.APPROVED)
+def test_finance_approval_is_the_final_reviewer_step(claim_service, make_claim, finance_actor):
+    """No separate disbursement action exists any more — Approve is where money-movement ends."""
+    claim = make_claim(ClaimStatus.FINANCE_REVIEW)
     updated = claim_service.execute_action(
-        claim.claim_number, action="DISBURSE", actor=finance_actor
+        claim.claim_number, action="APPROVE", actor=finance_actor
     )
-    assert updated.status is ClaimStatus.REIMBURSED
-    assert updated.reimbursed_at is not None
+    assert updated.status is ClaimStatus.APPROVED
+
+    with pytest.raises(InvalidStateTransitionError) as raised:
+        claim_service.execute_action(claim.claim_number, action="APPROVE", actor=finance_actor)
+    assert "Disbursed" not in raised.value.details["allowedNextStatuses"]
 
 
-def test_manager_cannot_disburse(claim_service, make_claim, manager_actor):
-    claim = make_claim(ClaimStatus.APPROVED)
-    with pytest.raises(ForbiddenError, match="finance or admin"):
-        claim_service.execute_action(claim.claim_number, action="DISBURSE", actor=manager_actor)
-
-
-def test_auto_approved_claim_can_be_disbursed_directly(claim_service, make_claim, finance_actor):
+def test_auto_approved_claim_can_be_approved_directly(claim_service, make_claim, finance_actor):
     claim = make_claim(ClaimStatus.AUTO_APPROVED)
     updated = claim_service.execute_action(
-        claim.claim_number, action="DISBURSE", actor=finance_actor
+        claim.claim_number, action="APPROVE", actor=finance_actor
     )
-    assert updated.status is ClaimStatus.REIMBURSED
+    assert updated.status is ClaimStatus.APPROVED
 
 
 def test_reimbursed_claim_is_terminal(claim_service, make_claim, finance_actor):
+    """``Reimbursed`` (retired) still classifies as closed for any pre-existing historical row."""
     claim = make_claim(ClaimStatus.REIMBURSED)
     with pytest.raises(ImmutableEntityError, match="closed"):
         claim_service.execute_action(claim.claim_number, action="APPROVE", actor=finance_actor)
 
 
-def test_cannot_disburse_a_claim_still_in_review(claim_service, make_claim, finance_actor):
-    """The state machine, not the caller, decides when money can move."""
-    claim = make_claim(ClaimStatus.MANAGER_REVIEW)
-    with pytest.raises(InvalidStateTransitionError) as raised:
+def test_disburse_action_no_longer_exists(claim_service, make_claim, finance_actor):
+    """``DISBURSE`` was retired along with the separate disbursement step."""
+    claim = make_claim(ClaimStatus.APPROVED)
+    with pytest.raises(ValidationError, match="Unsupported action"):
         claim_service.execute_action(claim.claim_number, action="DISBURSE", actor=finance_actor)
-    assert raised.value.details["currentStatus"] == "Manager_Review"
-    assert "Disbursed" not in raised.value.details["allowedNextStatuses"]
+
+
+def test_finance_approval_closes_the_workflow(
+    claim_service, make_claim, finance_actor, repositories
+):
+    """Approve is the final step now, so it has to close the workflow itself (nothing after it
+    does, unlike the old DISBURSE step). ``get_active_for_claim`` only returns
+    PENDING/IN_PROGRESS workflows, so ``None`` here means it was actually completed, not merely
+    unassigned."""
+    claim = make_claim(ClaimStatus.FINANCE_REVIEW)
+    claim_service.execute_action(claim.claim_number, action="APPROVE", actor=finance_actor)
+
+    assert repositories["workflows"].get_active_for_claim(claim.id) is None
+    [workflow] = repositories["workflows"].list_for_claim(claim.id)
+    assert workflow.status.value == "COMPLETED"
+    assert all(not step.is_open for step in workflow.steps)
 
 
 def test_manual_fraud_flag_persists_a_verdict(
@@ -687,6 +700,29 @@ def test_invalid_status_filter_is_a_validation_error(claim_service, manager_acto
         claim_service.list_claims(actor=manager_actor, status="Teleported")
 
 
+def test_status_filter_accepts_a_list_for_one_request_across_several_statuses(
+    claim_service, make_claim, manager_actor
+):
+    review = make_claim(ClaimStatus.MANAGER_REVIEW)
+    reimbursed = make_claim(ClaimStatus.REIMBURSED)
+    rejected = make_claim(ClaimStatus.REJECTED)
+
+    visible = {
+        c.id
+        for c in claim_service.list_claims(
+            actor=manager_actor, status=["Manager_Review", "Disbursed"]
+        )
+    }
+    assert review.id in visible
+    assert reimbursed.id in visible
+    assert rejected.id not in visible
+
+
+def test_invalid_status_in_a_list_filter_is_a_validation_error(claim_service, manager_actor):
+    with pytest.raises(ValidationError, match="ClaimStatus"):
+        claim_service.list_claims(actor=manager_actor, status=["Manager_Review", "Teleported"])
+
+
 def test_employee_gets_not_found_for_another_persons_claim(
     claim_service, make_claim, other_employee, employee_actor
 ):
@@ -699,6 +735,53 @@ def test_employee_gets_not_found_for_another_persons_claim(
 def test_manager_can_read_any_claim(claim_service, make_claim, other_employee, manager_actor):
     theirs = make_claim(owner=other_employee)
     assert claim_service.get_claim_for_actor(str(theirs.id), actor=manager_actor).id == theirs.id
+
+
+# --- team claims (reports-to view) --------------------------------------------
+
+
+def test_manager_sees_their_direct_reports_claims(
+    claim_service, make_claim, employee, manager_actor
+):
+    """``employee`` reports to ``manager_employee`` (see the fixture) — this is the manager's team."""
+    theirs = make_claim(owner=employee)
+    visible = {c.id for c in claim_service.list_claims_for_manager(actor=manager_actor)}
+    assert theirs.id in visible
+
+
+def test_manager_does_not_see_claims_outside_their_team(
+    claim_service, make_claim, other_employee, manager_actor
+):
+    """``other_employee`` has no manager at all, so this claim is nobody's team view."""
+    someone_elses = make_claim(owner=other_employee)
+    visible = {c.id for c in claim_service.list_claims_for_manager(actor=manager_actor)}
+    assert someone_elses.id not in visible
+
+
+def test_manager_with_no_direct_reports_sees_an_empty_team(claim_service, other_employee):
+    """A manager-role actor with nobody reporting to them gets an empty list, not an error."""
+    from tests.conftest import make_actor
+
+    lone_manager = make_actor("manager", employee_code=other_employee.employee_code)
+    assert claim_service.list_claims_for_manager(actor=lone_manager) == []
+
+
+def test_team_claims_response_matches_list_claims_shape(
+    claim_service, make_claim, employee, manager_actor, employee_actor
+):
+    """The manager's team view and the employee's own view serialize identically."""
+    from app.services.mappers import claim_to_dict
+
+    claim = make_claim(owner=employee)
+    [team_claim] = [
+        c for c in claim_service.list_claims_for_manager(actor=manager_actor) if c.id == claim.id
+    ]
+    [own_claim] = [
+        c for c in claim_service.list_claims(actor=employee_actor) if c.id == claim.id
+    ]
+    assert claim_to_dict(team_claim, include_internal_comments=True) == claim_to_dict(
+        own_claim, include_internal_comments=True
+    )
 
 
 # --- comments and draft editing ----------------------------------------------
@@ -808,10 +891,14 @@ def test_cannot_assign_a_reviewer_to_a_closed_claim(claim_service, make_claim, m
 # --- full happy path ---------------------------------------------------------
 
 
-def test_complete_lifecycle_draft_to_reimbursed(
+def test_complete_lifecycle_draft_to_approved(
     claim_service, claim_payload, employee_actor, manager_actor, finance_actor, repositories
 ):
-    """The canonical journey, asserting the recorded trail at the end."""
+    """The canonical journey, asserting the recorded trail at the end.
+
+    Ends at ``Approved`` — finance's Approve is the last reviewer step; there is no separate
+    disbursement action.
+    """
     claim = claim_service.submit_claim(
         claim_payload(amount=Decimal("38.00"), amountUSD=Decimal("38.00")), actor=employee_actor
     )
@@ -827,23 +914,18 @@ def test_complete_lifecycle_draft_to_reimbursed(
     )
     assert claim.status is ClaimStatus.APPROVED
 
-    claim = claim_service.execute_action(
-        claim.claim_number, action="DISBURSE", actor=finance_actor, notes="Paid"
-    )
-    assert claim.status is ClaimStatus.REIMBURSED
-
     # Timestamps for each milestone.
     assert claim.submitted_at and claim.processing_started_at and claim.review_started_at
-    assert claim.approved_at and claim.reimbursed_at
+    assert claim.approved_at is not None
 
     # Gap-free history ending at the terminal state.
     sequences = [entry.sequence for entry in claim.status_history]
     assert sequences == list(range(1, len(sequences) + 1))
-    assert claim.status_history[-1].to_status is ClaimStatus.REIMBURSED
+    assert claim.status_history[-1].to_status is ClaimStatus.APPROVED
 
     # Every business action left an audit record.
     actions = _audit_actions(repositories, claim.claim_number)
-    assert actions.count("APPROVAL_ACTION") == 3
+    assert actions.count("APPROVAL_ACTION") == 2
     assert "SUBMIT_CLAIM" in actions
 
     # The workflow closed out.

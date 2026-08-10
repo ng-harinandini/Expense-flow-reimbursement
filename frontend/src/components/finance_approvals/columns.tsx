@@ -1,11 +1,35 @@
 import type { ColDef, ICellRendererParams } from "ag-grid-community";
 
 import type { Claim } from "@/types";
-import { formatDate } from "@/components/my_claims/columns";
-import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
+import {
+  ClaimTitleCell,
+  ItemCountCell,
+  StatusBadge,
+} from "@/components/my_claims/columns";
 
-export function managerNameFor(claim: Claim) {
-  return INITIAL_EMPLOYEES.find((e) => e.id === claim.employeeId)?.managerName ?? "—";
+
+export function managerNameFor(claim: Claim): string {
+  const step = claim.workflowHistory.find((entry) => entry.stepName === "Manager Approval");
+  return step?.actorName ?? "—";
+}
+
+/**
+ * Whether *finance* (not the manager) was the one who rejected this claim. ``Rejected`` is one
+ * shared terminal status regardless of which reviewer closed it, so the acting role has to be read
+ * off the last "Approval Decision" history entry rather than the status alone (see
+ * ``ClaimRepository.reject_claim``, which logs every rejection under that same step name).
+ */
+export function isFinanceRejected(claim: Claim): boolean {
+  if (claim.status !== "Rejected") return false;
+  const decisions = claim.workflowHistory.filter(
+    (entry) => entry.stepName === "Approval Decision" && entry.action.startsWith("Rejected claim")
+  );
+  return decisions[decisions.length - 1]?.actorRole === "finance";
+}
+
+/** Finance can no longer act once the claim has left ``Finance_Review`` (paid out or rejected). */
+export function isFinanceActionable(claim: Claim): boolean {
+  return claim.status === "Finance_Review";
 }
 
 export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[] {
@@ -32,20 +56,38 @@ export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[]
     },
     {
       headerName: "Claim Title",
+      // Widest track: it carries two stacked lines, and the date range must not wrap.
       field: "claimTitle",
-      flex: 1.4,
-      minWidth: 190,
-      cellClass: "font-medium",
+      flex: 2,
+      minWidth: 230,
+      cellRenderer: (params: ICellRendererParams<Claim>) =>
+        params.data ? <ClaimTitleCell claim={params.data} /> : null,
     },
     {
-      headerName: "From - To Date",
-      colId: "dateRange",
-      flex: 1.2,
-      minWidth: 180,
-      valueGetter: (params) =>
-        params.data
-          ? `${formatDate(params.data.fromDate)} – ${formatDate(params.data.toDate)}`
-          : "",
+      headerName: "Items",
+      colId: "itemCount",
+      flex: 0.7,
+      minWidth: 90,
+      valueGetter: (params) => (params.data ? params.data.items.length : 0),
+      cellRenderer: (params: ICellRendererParams<Claim>) =>
+        params.data ? <ItemCountCell claim={params.data} /> : null,
+    },
+    {
+      headerName: "Total Amount",
+      field: "totalAmount",
+      flex: 1,
+      minWidth: 130,
+      cellClass: "font-semibold",
+      // valueFormatter: (params) =>
+      //   formatCurrency(params.value as number, params.data?.currency),
+    },
+    {
+      headerName: "Claim Status",
+      field: "status",
+      flex: 1.1,
+      minWidth: 150,
+      cellRenderer: (params: ICellRendererParams<Claim>) =>
+        params.data ? <StatusBadge status={params.data.status} /> : null,
     },
     {
       headerName: "Action",
@@ -60,7 +102,7 @@ export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[]
           className="text-sm font-medium text-secondary hover:underline"
           onClick={() => params.data && onView(params.data)}
         >
-          View Details
+          {params.data && isFinanceActionable(params.data) ? "Take Action" : "View Details"}
         </button>
       ),
     },

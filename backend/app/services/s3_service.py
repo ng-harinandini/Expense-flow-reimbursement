@@ -73,6 +73,39 @@ def upload_receipt_to_s3(
         return _fallback(f"upload error: {e}")
 
 
+class S3DownloadError(Exception):
+    """Raised when an object cannot be fetched from S3.
+
+    Unlike :func:`upload_receipt_to_s3`, downloads do **not** degrade gracefully: a viewer that
+    silently renders nothing is worse than one that reports the failure, and there is no
+    meaningful fallback for bytes that only exist in S3.
+    """
+
+
+def download_receipt_from_s3(key: str) -> tuple[bytes, Optional[str]]:
+    """Fetch the object at ``key``, returning ``(data, content_type)``.
+
+    The caller is responsible for authorizing ``key`` before calling this — the function itself
+    will read any key in the bucket.
+
+    Raises :class:`S3DownloadError` when S3 is unconfigured, the client is unavailable, or the
+    object is missing/unreadable.
+    """
+    if not s3_enabled():
+        raise S3DownloadError("S3_BUCKET_NAME not configured")
+
+    client = _get_s3_client()
+    if client is None:
+        raise S3DownloadError("boto3/S3 client unavailable")
+
+    try:
+        response = client.get_object(Bucket=settings.S3_BUCKET_NAME, Key=key)
+        return response["Body"].read(), response.get("ContentType")
+    except Exception as e:
+        logger.error("S3 download failed for key=%s: %s", key, e)
+        raise S3DownloadError(str(e)) from e
+
+
 def _fallback(reason: str) -> Dict[str, Any]:
     logger.info("S3 upload skipped (fallback): %s", reason)
     return {

@@ -43,7 +43,7 @@ def test_aws_export_admin_only(client):
     assert client.get("/api/aws/export-code").status_code == 200
 
 
-# --- ownership + DISBURSE ----------------------------------------------------
+# --- ownership + retired actions ----------------------------------------------
 
 def test_employee_sees_only_own_claims(client, make_claim, employee, other_employee):
     mine = make_claim(owner=employee)
@@ -58,18 +58,17 @@ def test_employee_sees_only_own_claims(client, make_claim, employee, other_emplo
     assert all(c["employeeId"] == employee.employee_code for c in body)
 
 
-def test_manager_cannot_disburse_finance_can(client, make_claim):
-    claim = make_claim(ClaimStatus.AUTO_APPROVED)
+def test_disburse_is_rejected_for_every_role(client, make_claim):
+    """DISBURSE was retired — Approve is the final reviewer step, so this is a 422 for anyone,
+    not a role-gated 403/200 the way it used to be."""
+    claim = make_claim(ClaimStatus.APPROVED)
 
-    as_role("manager", employee_id=SEED_MANAGER_CODE)
-    assert client.post(
-        f"/api/claims/{claim.id}/action", json={"action": "DISBURSE"}
-    ).status_code == 403
-
-    as_role("finance")
-    response = client.post(f"/api/claims/{claim.id}/action", json={"action": "DISBURSE"})
-    assert response.status_code == 200
-    assert response.json()["status"] == "Disbursed"
+    for role, employee_id in [
+        ("manager", SEED_MANAGER_CODE), ("finance", None), ("admin", None),
+    ]:
+        as_role(role, employee_id=employee_id)
+        response = client.post(f"/api/claims/{claim.id}/action", json={"action": "DISBURSE"})
+        assert response.status_code == 422
 
 
 def test_create_claim_requires_employee_role(client):

@@ -290,8 +290,8 @@ class ActionRequestSchema(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     action: str = Field(
-        pattern="^(APPROVE|REJECT|DISBURSE|FLAG_FRAUD)$",
-        description="APPROVE, REJECT, DISBURSE, or FLAG_FRAUD.",
+        pattern="^(APPROVE|REJECT|FLAG_FRAUD)$",
+        description="APPROVE, REJECT, or FLAG_FRAUD.",
     )
     actorName: Optional[str] = Field(default=None, deprecated="Ignored — taken from the token.")
     actorRole: Optional[str] = Field(default=None, deprecated="Ignored — taken from the token.")
@@ -309,6 +309,30 @@ class ActionRequestSchema(BaseModel):
     @classmethod
     def _normalize_action(cls, value: Any) -> Any:
         return value.strip().upper() if isinstance(value, str) else value
+
+
+class WithdrawClaimSchema(BaseModel):
+    """Request body for ``POST /claims/{id}/withdraw``.
+
+    Everything is optional — a withdrawal needs no justification, unlike a rejection. The body may
+    be omitted entirely.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    reason: Optional[str] = Field(
+        default=None,
+        max_length=4000,
+        description="Optional note explaining why the claim was withdrawn.",
+    )
+    expectedVersion: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Claim 'version' from the last read. When supplied, a concurrent decision by a "
+            "reviewer is rejected with 409 instead of racing the withdrawal."
+        ),
+    )
 
 
 class AssignReviewerSchema(BaseModel):

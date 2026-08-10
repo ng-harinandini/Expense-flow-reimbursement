@@ -9,6 +9,7 @@ Error mapping is handled centrally (``app.core.errors``), so no route catches do
     unknown claim / employee        -> 404
     not the caller's claim          -> 404 (employees) / 403 (explicit ownership failure)
     illegal lifecycle transition    -> 409  (with the legal next states in the body)
+    withdrawal of a flagged claim   -> 403
     duplicate submission            -> 409
     receipt already claimed         -> 409
     concurrent modification         -> 409
@@ -22,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Body, Depends, Query, status
 
 from app.core.deps import (
     CurrentUser,
@@ -41,6 +42,7 @@ from app.schemas.schemas import (
     ExpenseClaimCreateSchema,
     ExpenseClaimUpdateSchema,
     ItemDecisionRequestSchema,
+    WithdrawClaimSchema,
 )
 from app.services.claim_service import ClaimService
 from app.services.mappers import claim_to_dict
@@ -60,7 +62,7 @@ def _serialize(claim, actor: Actor) -> dict[str, Any]:
 @router.get("", response_model=List[dict])
 def get_claims(
     category: Optional[str] = None,
-    status: Optional[str] = None,
+    status: Optional[List[str]] = Query(None),
     employeeId: Optional[str] = None,
     riskLevel: Optional[str] = None,
     limit: int = Query(200, ge=1, le=1000),
@@ -74,6 +76,33 @@ def get_claims(
         category=category,
         status=status,
         employee_code=employeeId,
+        risk_level=riskLevel,
+        limit=limit,
+        offset=offset,
+    )
+    return [_serialize(claim, actor) for claim in claims]
+
+
+@router.get("/team", response_model=List[dict])
+def get_team_claims(
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+    riskLevel: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    current: CurrentUser = Depends(require_roles("manager")),
+    service: ClaimService = Depends(get_claim_service),
+):
+    """Claims filed by the caller's direct reports. Same shape as ``GET /claims``, scoped to the
+    manager's own team instead of the caller's own claims.
+
+    Declared ahead of ``/{claim_id}`` so this static path is never shadowed by that dynamic one.
+    """
+    actor = Actor.from_current_user(current)
+    claims = service.list_claims_for_manager(
+        actor=actor,
+        category=category,
+        status=status,
         risk_level=riskLevel,
         limit=limit,
         offset=offset,
@@ -161,11 +190,11 @@ def execute_claim_action(
     service: ClaimService = Depends(get_claim_service),
     uow: UnitOfWork = Depends(get_unit_of_work),
 ):
-    """Execute ``APPROVE``, ``REJECT``, ``DISBURSE`` or ``FLAG_FRAUD``.
+    """Execute ``APPROVE``, ``REJECT``, or ``FLAG_FRAUD``.
 
     The actor is the authenticated caller — ``actorName``/``actorRole`` in the body are ignored.
-    Only finance/admin may ``DISBURSE``. An action that is illegal from the claim's current state
-    returns 409 listing the states that are reachable.
+    ``APPROVE`` is the final reviewer step (no separate disbursement action). An action that is
+    illegal from the claim's current state returns 409 listing the states that are reachable.
     """
     actor = Actor.from_current_user(current)
     claim = service.execute_action(
@@ -173,6 +202,26 @@ def execute_claim_action(
         action=payload.action,
         actor=actor,
         notes=payload.notes,
+        expected_version=payload.expectedVersion,
+    )
+    uow.commit()
+    return _serialize(claim, actor)
+
+
+@router.post("/{claim_id}/withdraw", response_model=dict)
+def withdraw_claim(
+    claim_id: str,
+    # Defaulted so a bodyless POST is valid — a withdrawal needs no justification.
+    payload: WithdrawClaimSchema,
+    actor: Actor = Depends(get_actor),
+    service: ClaimService = Depends(get_claim_service),
+    uow: UnitOfWork = Depends(get_unit_of_work),
+):
+    "Withdraw claim by employee"
+    claim = service.withdraw_claim(
+        claim_id,
+        actor=actor,
+        reason=payload.reason,
         expected_version=payload.expectedVersion,
     )
     uow.commit()

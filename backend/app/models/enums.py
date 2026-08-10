@@ -78,6 +78,7 @@ class ClaimStatus(_WireEnum):
     REJECTED = "Rejected"
     REIMBURSED = "Disbursed"
     FLAGGED_FRAUD = "Flagged_Fraud"
+    WITHDRAWN = "Withdrawn"
 
 
 # Canonical spec spellings accepted as input (normalized: upper + underscores).
@@ -87,6 +88,7 @@ ClaimStatus._aliases = {  # type: ignore[attr-defined]
     "DISBURSED": ClaimStatus.REIMBURSED.value,
     "REIMBURSED": ClaimStatus.REIMBURSED.value,
     "FLAGGED": ClaimStatus.FLAGGED_FRAUD.value,
+    "CANCELLED": ClaimStatus.WITHDRAWN.value,
 }
 
 
@@ -170,6 +172,7 @@ class AuditAction(_WireEnum):
     CLAIM_CREATE = "CLAIM_CREATE"
     SUBMIT_CLAIM = "SUBMIT_CLAIM"
     CLAIM_UPDATE = "CLAIM_UPDATE"
+    CLAIM_WITHDRAW = "CLAIM_WITHDRAW"
     CLAIM_STATUS_CHANGE = "CLAIM_STATUS_CHANGE"
     EXPENSE_ITEM_DECISION = "EXPENSE_ITEM_DECISION"
     POLICY_EVALUATION = "POLICY_EVALUATION"

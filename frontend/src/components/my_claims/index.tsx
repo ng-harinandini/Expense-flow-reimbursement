@@ -2,15 +2,10 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { AgGridReact } from "ag-grid-react";
-import {
-  AllCommunityModule,
-  ModuleRegistry,
-  themeQuartz,
-  type ColDef,
-} from "ag-grid-community";
+import type { ColDef } from "ag-grid-community";
 import { FileText, PlusCircle, Search } from "lucide-react";
 
+import { DataGrid } from "@/components/shared/DataGrid";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/input";
 import {
@@ -20,14 +15,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { getClaims } from "@/api/claims";
+import { useClaimsQuery } from "@/api/claims";
 import { getErrorMessage } from "@/lib/apiError";
 import type { Claim, ClaimStatus } from "@/types";
 
-import { buildColumnDefs, STATUS_LABELS } from "./columns";
+import { CENTERED_COL_DEF, buildColumnDefs } from "./columns";
+import { STATUS_LABELS } from "./status";
 import { ClaimDetailDialog } from "./ClaimDetailDialog";
-
-ModuleRegistry.registerModules([AllCommunityModule]);
+import { useExpandableItems } from "./useExpandableItems";
 
 const STATUS_OPTIONS: ClaimStatus[] = [
   "Submitted",
@@ -36,10 +31,12 @@ const STATUS_OPTIONS: ClaimStatus[] = [
   "Finance_Review",
   "Flagged_Fraud",
   "Approved",
-  "Disbursed",
+  "Withdrawn",
 ];
 
 const ALL_STATUSES = "all-statuses";
+
+const ROW_HEIGHT = 64;
 
 function MyClaims() {
   const router = useRouter();
@@ -47,20 +44,7 @@ function MyClaims() {
   const [status, setStatus] = React.useState<string>(ALL_STATUSES);
   const [selectedClaim, setSelectedClaim] = React.useState<Claim | null>(null);
   const [isDetailOpen, setIsDetailOpen] = React.useState(false);
-  const [allClaims, setAllClaims] = React.useState<Claim[]>([]);
-  const [isLoading, setIsLoading] = React.useState(true);
-  const [fetchError, setFetchError] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    setIsLoading(true);
-    setFetchError(null);
-    getClaims()
-      .then((data) => { if (!cancelled) setAllClaims(data); })
-      .catch((err) => { if (!cancelled) setFetchError(getErrorMessage(err, "Failed to load claims.")); })
-      .finally(() => { if (!cancelled) setIsLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
+  const { data: allClaims = [], isLoading, error } = useClaimsQuery();
 
   const handleView = React.useCallback((claim: Claim) => {
     setSelectedClaim(claim);
@@ -69,7 +53,7 @@ function MyClaims() {
 
   const columnDefs = React.useMemo<ColDef<Claim>[]>(
     () => buildColumnDefs(handleView),
-    [handleView]
+    [handleView],
   );
 
   const rowData = React.useMemo(() => {
@@ -93,9 +77,12 @@ function MyClaims() {
       resizable: true,
       sortable: true,
       filter: false,
+      ...CENTERED_COL_DEF,
     }),
-    []
+    [],
   );
+
+  const expandableProps = useExpandableItems(rowData, columnDefs, ROW_HEIGHT);
 
   return (
     <div className="rounded-xl border bg-card shadow-sm">
@@ -105,7 +92,9 @@ function MyClaims() {
             <FileText className="size-6 text-primary" />
           </div>
           <div className="min-w-0">
-            <h2 className="text-xl font-semibold text-foreground">My Expense Claims</h2>
+            <h2 className="text-xl font-semibold text-foreground">
+              My Expense Claims
+            </h2>
             <p className="text-sm text-muted-foreground">
               Review claims, AI policy violations, and fraud risk scores
             </p>
@@ -149,20 +138,18 @@ function MyClaims() {
       </div>
 
       <div className="h-[560px] px-6 pb-6">
-        {fetchError ? (
+        {error ? (
           <div className="flex h-full items-center justify-center text-sm text-destructive">
-            {fetchError}
+            {getErrorMessage(error, "Failed to load claims.")}
           </div>
         ) : (
-          <AgGridReact<Claim>
-            theme={themeQuartz}
-            rowData={rowData}
-            columnDefs={columnDefs}
+          <DataGrid
+            {...expandableProps}
             defaultColDef={defaultColDef}
             loading={isLoading}
             overlayNoRowsTemplate="No claims found matching your filter criteria."
             domLayout="normal"
-            rowHeight={56}
+            rowHeight={ROW_HEIGHT}
             headerHeight={44}
             suppressCellFocus
           />

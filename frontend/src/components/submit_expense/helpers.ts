@@ -112,3 +112,12 @@ export function formatUsd(amount: number) {
     currency: "USD",
   }).format(amount);
 }
+
+/** `YYYY-MM-DD` (the date input's value format) as `dd/mm/yyyy`.
+*/
+export function formatDdMmYyyy(isoDate: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+  if (!match) return isoDate;
+  const [, year, month, day] = match;
+  return `${day}/${month}/${year}`;
+}

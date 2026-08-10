@@ -3,9 +3,9 @@
 import * as React from "react";
 import {
   AlertTriangle,
-  BadgeCheck,
   Check,
   FileText,
+  Undo2,
   UserCircle,
   Wallet,
   X,
@@ -38,19 +38,17 @@ const ROLE_BADGE_CLASSES: Record<UserRole, string> = {
   auditor: "bg-muted text-muted-foreground",
 };
 
-type StepKey = "submitted" | "managerReview" | "financeReview" | "disbursed";
+type StepKey = "submitted" | "managerReview" | "financeReview";
 
 interface StepDefinition {
   key: StepKey;
   label: string;
   icon: LucideIcon;
 }
-
 const STEPS: StepDefinition[] = [
   { key: "submitted", label: "Submitted", icon: FileText },
   { key: "managerReview", label: "Manager review", icon: UserCircle },
   { key: "financeReview", label: "Finance review", icon: Wallet },
-  { key: "disbursed", label: "Disbursed", icon: BadgeCheck },
 ];
 
 const TERMINAL_STEP_INDEX_BY_STATUS: Record<ClaimStatus, number> = {
@@ -64,8 +62,9 @@ const TERMINAL_STEP_INDEX_BY_STATUS: Record<ClaimStatus, number> = {
   Finance_Review: 2,
   Approved: 2,
   Rejected: 2,
-  Disbursed: 3,
+  Disbursed: 2,
   Flagged_Fraud: 1,
+  Withdrawn: 0,
 };
 
 export function getCurrentStepIndex(status: ClaimStatus): number {
@@ -75,8 +74,10 @@ export function getCurrentStepIndex(status: ClaimStatus): number {
 const STEP_STATUS_LABEL_OVERRIDE: Partial<Record<ClaimStatus, string>> = {
   Approved: "Approved",
   Auto_Approved: "Approved",
+  Disbursed: "Approved",
   Rejected: "Rejected",
   Flagged_Fraud: "Flagged for review",
+  Withdrawn: "Withdrawn",
 };
 
 interface StepVisualOverride {
@@ -92,11 +93,15 @@ function getCurrentStepOverride(status: ClaimStatus): StepVisualOverride | null 
   switch (status) {
     case "Approved":
     case "Auto_Approved":
+    case "Disbursed": // retired status, folded into the same "Approved" treatment
       return { icon: Check, circleClass: "bg-emerald-600 text-white", textClass: "text-emerald-600" };
     case "Rejected":
       return { icon: X, circleClass: "bg-destructive text-white", textClass: "text-destructive" };
     case "Flagged_Fraud":
       return { icon: AlertTriangle, circleClass: "bg-destructive text-white", textClass: "text-destructive" };
+    case "Withdrawn":
+      // Neutral, not destructive: the employee chose to close this, nothing went wrong.
+      return { icon: Undo2, circleClass: "bg-muted text-muted-foreground", textClass: "text-muted-foreground" };
     default:
       return null;
   }

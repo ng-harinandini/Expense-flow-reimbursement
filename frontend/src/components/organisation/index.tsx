@@ -1,15 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { AgGridReact } from "ag-grid-react";
-import {
-  AllCommunityModule,
-  ModuleRegistry,
-  themeQuartz,
-  type ColDef,
-} from "ag-grid-community";
+import type { ColDef } from "ag-grid-community";
 import { Search, UserPlus, Users } from "lucide-react";
 
+import { DataGrid } from "@/components/shared/DataGrid";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/input";
 import {
@@ -34,8 +29,6 @@ import { DeleteEmployeeDialog } from "./DeleteEmployeeDialog";
 import { EmployeeFormDialog } from "./EmployeeFormDialog";
 import type { EmployeeFormValues } from "./employeeSchema";
 import { ROLE_LABELS, managerOptions } from "./helpers";
-
-ModuleRegistry.registerModules([AllCommunityModule]);
 
 const ALL_ROLES = "all-roles";
 
@@ -212,8 +205,7 @@ function Organisation() {
       </div>
 
       <div className="h-[560px] px-6 pb-6">
-        <AgGridReact<Employee>
-          theme={themeQuartz}
+        <DataGrid<Employee>
           rowData={rowData}
           loading={isLoading}
           columnDefs={columnDefs}
