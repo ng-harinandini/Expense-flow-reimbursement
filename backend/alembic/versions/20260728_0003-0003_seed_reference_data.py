@@ -103,8 +103,7 @@ EMPLOYEES: tuple[dict, ...] = (
 
 POLICY_EFFECTIVE_FROM = date(2026, 1, 1)
 
-# Typed columns drive the existing category engine; conditions/actions are stored for the
-# Phase 2+ declarative evaluator (not read yet).
+# Typed columns and conditions/actions are consumed by the database-backed policy evaluator.
 POLICY_RULES: tuple[dict, ...] = (
     {
         "code": "MEALS_STANDARD",
@@ -247,6 +246,7 @@ POLICY_RULES: tuple[dict, ...] = (
             "requirePreApproval": True,
             "requireAttendees": True,
             "requireReceiptAboveUsd": 50.0,
+            "minimumAttendeeTextLength": 5,
             "routeOnBreach": "Manager_Review",
         },
     },

@@ -75,6 +75,7 @@ def test_revision_graph_is_complete_and_joined():
     script = ScriptDirectory.from_config(alembic_config())
     revisions = {r.revision for r in script.walk_revisions()}
     assert revisions == {
+        "0015_database_policy_evaluator",
         "0014_item_ai_classification",
         "0013_merge_heads",
         "0012_limit_expression_unbounded",
@@ -117,6 +118,7 @@ def test_revision_graph_is_complete_and_joined():
 
     # The current head is a plain continuation of the second join, not a third fork.
     assert script.get_revision("0014_item_ai_classification").down_revision == "0013_merge_heads"
+    assert script.get_revision("0015_database_policy_evaluator").down_revision == "0014_item_ai_classification"
 
 
 def test_every_revision_defines_a_downgrade():
@@ -324,7 +326,8 @@ def test_expense_categories_match_policy_rule_categories(db_engine):
     # engine's generic else-branch default. So the invariant is narrower post-0012: every *seeded
     # policy rule's* category must still resolve to a real, active expense_categories row — not
     # the reverse.
-    assert policy <= seeded, f"policy rules with no matching category: {policy - seeded}"
+    # ``*`` is the database-backed global policy category (for example, claim age).
+    assert (policy - {"*"}) <= seeded, f"policy rules with no matching category: {policy - seeded}"
 
 
 def test_seed_ids_are_deterministic():

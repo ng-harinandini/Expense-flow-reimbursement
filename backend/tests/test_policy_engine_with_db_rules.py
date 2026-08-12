@@ -1,8 +1,7 @@
 """The category policy engine, now fed from the ``policy_rules`` table.
 
-Phase 1 changed the engine's *input* (a rules argument sourced from the database) but must not have
-changed its *verdicts*. These cases pin the thresholds per category so a later refactor toward the
-declarative ``conditions``/``actions`` payloads can be checked against known-good behaviour.
+These cases pin the database-configured thresholds and declarative ``conditions``/``actions``
+behaviour per category.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from app.services.policy_engine import GENERAL_POLICY_CONSTANTS, evaluate_expense_policy
+from app.services.policy_engine import evaluate_expense_policy
 
 
 @pytest.fixture
@@ -98,7 +97,9 @@ def test_ground_transport_thresholds(rules):
 
 
 def test_flights_always_require_manual_review(rules):
-    report = evaluate_expense_policy(_claim(category="Air Travel", amountUSD=520.0), rules)
+    report = evaluate_expense_policy(
+        _claim(category="Air Travel", amountUSD=520.0, hasPreApproval=True), rules
+    )
     assert report["requiresManualReview"] is True
     assert report["autoApproveLimit"] == 0.0
     assert "FLIGHT_ALWAYS_MANUAL" in _rule_ids(report)
@@ -115,7 +116,7 @@ def test_flights_always_require_manual_review(rules):
 )
 def test_flight_cabin_class_depends_on_grade(rules, grade, expected_rule):
     report = evaluate_expense_policy(
-        _claim(category="Air Travel", amountUSD=800.0, employeeGrade=grade), rules
+        _claim(category="Air Travel", amountUSD=800.0, employeeGrade=grade, hasPreApproval=True), rules
     )
     assert expected_rule in _rule_ids(report)
 
@@ -155,7 +156,7 @@ def test_client_entertainment_restricted_to_manager_grades(rules):
 
     senior = evaluate_expense_policy(
         _claim(category="Client / Business Entertainment", amountUSD=200.0, employeeGrade="L5",
-               attendees="Alice, Bob (ACME)"),
+               attendees="Alice, Bob (ACME)", hasPreApproval=True),
         rules,
     )
     assert senior["overallPassed"] is True
@@ -193,10 +194,15 @@ def test_missing_receipt_fails_when_one_is_required(rules):
 def test_claims_older_than_ninety_days_need_director_approval(rules):
     stale = (date.today() - timedelta(days=120)).isoformat()
     report = evaluate_expense_policy(_claim(expenseDate=stale), rules)
+    age_limit = next(
+        rule["actions"]["maxClaimAgeDays"]
+        for rule in rules
+        if rule.get("actions", {}).get("maxClaimAgeDays") is not None
+    )
 
     assert report["overallPassed"] is False
     assert report["requiresDirectorApprovalForAge"] is True
-    assert report["daysSinceExpense"] > GENERAL_POLICY_CONSTANTS["CLAIM_AGE_MAX_DAYS"]
+    assert report["daysSinceExpense"] > age_limit
     assert "AGE_LIMIT_90_DAYS" in _rule_ids(report)
 
 
@@ -216,14 +222,13 @@ def test_engine_tolerates_an_empty_ruleset():
 
 def test_engine_reads_thresholds_from_the_supplied_rules(policy_rule_service, admin_actor):
     """Changing the stored rule must change the verdict — proof the DB is the source of truth."""
-    # No Relocation rule is seeded, so the uncategorised fallback cap ($300) applies and $250 is
-    # within it.
+    # No Relocation rule is seeded, so the engine must fail closed instead of inventing a cap.
     baseline = evaluate_expense_policy(
         _claim(category="Relocation", amountUSD=250.0),
         policy_rule_service.rules_for_engine(),
     )
-    assert baseline["maxLimitAllowed"] == 300.0
-    assert baseline["overallPassed"] is True
+    assert baseline["maxLimitAllowed"] is None
+    assert baseline["overallPassed"] is False
 
     # Publishing a stricter Relocation cap must flip the same claim to a violation.
     policy_rule_service.replace_ruleset(

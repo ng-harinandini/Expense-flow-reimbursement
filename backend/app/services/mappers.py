@@ -374,7 +374,13 @@ def policy_rule_to_dict(rule: PolicyRule) -> dict[str, Any]:
         "category": rule.category,
         "maxAmountUSD": rule.limit_expression or _float(rule.expense_limit),
         "autoApproveLimitUSD": _float(rule.auto_approve_limit),
-        "receiptRequiredAboveUSD": _float(rule.receipt_required_above) or 0.0,
+        # Preserve NULL: a missing threshold means the policy does not require a receipt based on
+        # amount.  Converting NULL to zero made every custom rule silently require a receipt.
+        "receiptRequiredAboveUSD": (
+            _float(rule.receipt_required_above)
+            if rule.receipt_required_above is not None
+            else None
+        ),
         "requiresPreApproval": rule.requires_pre_approval,
         "gradeTier": rule.grade_tier or "All Staff",
         "specialRules": rule.special_rules or [],
