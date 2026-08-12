@@ -932,3 +932,72 @@ def test_complete_lifecycle_draft_to_approved(
     workflow = claim.active_workflow
     assert workflow is not None
     assert all(not step.is_open for step in workflow.steps)
+
+
+# --- item routing: where a classification verdict can and cannot reach ----------------------------
+# Pure-function tests over ``ClaimService._route_item``, deliberately free of the database so they
+# run even where PostgreSQL is unavailable. They pin the boundary the document-classification layer
+# must respect: it may hold a clean item for a human, and it may do nothing else.
+
+
+def _clean_policy() -> dict:
+    return {"overallPassed": True, "requiresManualReview": False}
+
+
+def _clean_fraud() -> dict:
+    return {"isFlagged": False, "riskScore": 0}
+
+
+def test_classification_review_flag_holds_an_otherwise_clean_item() -> None:
+    from app.services.claim_service import ClaimService
+
+    status = ClaimService._route_item(
+        _clean_policy(), _clean_fraud(), {"categoryReviewRequired": True}
+    )
+
+    assert status is ExpenseItemStatus.POLICY_HOLD
+
+
+def test_clean_classification_leaves_an_item_auto_approved() -> None:
+    from app.services.claim_service import ClaimService
+
+    status = ClaimService._route_item(
+        _clean_policy(), _clean_fraud(), {"categoryReviewRequired": False}
+    )
+
+    assert status is ExpenseItemStatus.AUTO_APPROVED
+
+
+def test_absent_classification_does_not_change_routing() -> None:
+    """A disabled capability, or a silent no-op, must route exactly as it did before it existed."""
+    from app.services.claim_service import ClaimService
+
+    assert (
+        ClaimService._route_item(_clean_policy(), _clean_fraud(), None)
+        is ExpenseItemStatus.AUTO_APPROVED
+    )
+    assert (
+        ClaimService._route_item(_clean_policy(), _clean_fraud())
+        is ExpenseItemStatus.AUTO_APPROVED
+    )
+
+
+def test_classification_never_relaxes_a_fraud_or_policy_verdict() -> None:
+    """The engines outrank classification in both directions — it can hold, never release."""
+    from app.services.claim_service import ClaimService
+
+    flagged_fraud = {"isFlagged": True, "riskScore": 99}
+    clean_classification = {"categoryReviewRequired": False}
+
+    assert (
+        ClaimService._route_item(_clean_policy(), flagged_fraud, clean_classification)
+        is ExpenseItemStatus.FRAUD_FLAG
+    )
+    assert (
+        ClaimService._route_item(
+            {"overallPassed": False, "requiresManualReview": False},
+            _clean_fraud(),
+            clean_classification,
+        )
+        is ExpenseItemStatus.POLICY_HOLD
+    )

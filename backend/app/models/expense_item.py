@@ -91,11 +91,17 @@ class ExpenseItem(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base
             "fraud_risk_score IS NULL OR (fraud_risk_score >= 0 AND fraud_risk_score <= 100)",
             name="ck_expense_items_fraud_risk_score_range",
         ),
+        CheckConstraint(
+            "ai_classification_confidence IS NULL OR "
+            "(ai_classification_confidence >= 0 AND ai_classification_confidence <= 1)",
+            name="ck_expense_items_ai_classification_confidence_range",
+        ),
         Index("ix_expense_items_claim_id", "claim_id"),
         Index("ix_expense_items_status", "status"),
         Index("ix_expense_items_expense_date", "expense_date"),
         Index("ix_expense_items_category", "category"),
         Index("ix_expense_items_category_id", "category_id"),
+        Index("ix_expense_items_category_review_required", "category_review_required"),
         # Exact-byte duplicate receipt detection — the index is what makes it usable.
         Index("ix_expense_items_file_hash", "file_hash"),
         # Duplicate probe: the employee side is reached by joining ``claims``, which is already
@@ -176,6 +182,31 @@ class ExpenseItem(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base
     is_fraud_flagged: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+
+    # --- AI document classification (a verdict about the category, not a value the engines
+    # resolve into — kept separate from the three-layers-of-receipt-truth columns above) ---
+    # Null when classification never ran, or when the model's answer wasn't a recognized category
+    # — an unrecognized category is never persisted here (``category`` above stays authoritative).
+    ai_suggested_category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Set whenever a response was parsed at all, including the invalid-category case — this is the
+    # "classification actually ran" signal that mappers.item_to_dict gates on.
+    ai_document_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    ai_classification_confidence: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(4, 3), nullable=True
+    )
+    category_mismatch: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    # Computed once by the classification service (mismatch, low confidence, invalid category, or
+    # provider failure) — stored rather than derived live, so it stays stable even if the
+    # confidence threshold setting changes later.
+    category_review_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    # Category-specific extraction output. Not the same column as ``ocr_extracted_json`` above,
+    # which is Textract-verbatim and never rewritten.
+    ai_category_fields: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    ai_classification_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # --- lifecycle + human decision ---
     status: Mapped[ExpenseItemStatus] = mapped_column(

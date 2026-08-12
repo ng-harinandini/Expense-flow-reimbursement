@@ -679,6 +679,13 @@ def test_child_flag_requires_its_own_value_too(flags: FeatureFlags) -> None:
     assert flags.is_enabled("ai.llm.explanations") is False
 
 
+def test_category_classification_flag_reads_ai_classification_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("AI_CLASSIFICATION_ENABLED", "true")
+    flags = FeatureFlags(AISettings(_env_file=None))
+
+    assert flags.is_enabled("ai.category_classification") is True
+
+
 def test_disabled_reason_identifies_the_responsible_ancestor(flags: FeatureFlags) -> None:
     flags.set_override("ai", False)
     reason = flags.disabled_reason("ai.rerank")

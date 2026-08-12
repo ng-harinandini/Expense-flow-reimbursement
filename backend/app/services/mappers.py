@@ -149,6 +149,23 @@ def item_to_dict(item: ExpenseItem) -> dict[str, Any]:
             if item.fraud_risk_score is not None
             else None
         ),
+        # ``None`` when classification never actually ran (feature off, or nothing to classify
+        # from) — not merely "no mismatch found". ``ai_document_type`` is set whenever a response
+        # was parsed at all, including the invalid-category case; ``category_review_required``
+        # covers the outright-failure case where nothing else got set.
+        "documentClassification": (
+            {
+                "documentType": item.ai_document_type,
+                "suggestedCategory": item.ai_suggested_category,
+                "confidence": _float(item.ai_classification_confidence),
+                "categoryMismatch": item.category_mismatch,
+                "needsManualReview": item.category_review_required,
+                "extractedFields": item.ai_category_fields,
+                "notes": item.ai_classification_notes,
+            }
+            if item.ai_document_type is not None or item.category_review_required
+            else None
+        ),
         "status": item.status.value,
         "decidedAt": _iso(item.decided_at),
         "decisionNotes": item.decision_notes,

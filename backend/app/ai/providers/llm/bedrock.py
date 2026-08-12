@@ -8,11 +8,15 @@ supported by recent botocore releases.
 
 from __future__ import annotations
 
+import base64
 import json
+import logging
 import os
 from typing import Any, Optional
 
 from app.ai.core.errors import ProviderError, ProviderNotConfiguredError, ProviderTimeoutError
+
+logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "bedrock"
 
@@ -31,6 +35,8 @@ class BedrockGemmaProvider:
         max_output_tokens: int = 8192,
         temperature: float = 0.0,
         client: Any = None,
+        kind: str = "RULE_EXTRACTION",
+        model_setting_name: str = "AI_RULE_EXTRACTION_MODEL",
     ) -> None:
         self._model = model
         self._region = region
@@ -38,6 +44,11 @@ class BedrockGemmaProvider:
         self._max_output_tokens = max_output_tokens
         self._temperature = temperature
         self._client = client
+        # Labels this provider instance's failures in the AI error hierarchy (surfaced in the 503
+        # body's ``kind``/``remedy`` fields) — callers other than rule extraction must pass their
+        # own label or an outage would be misreported as a rule-extraction failure.
+        self._kind = kind
+        self._model_setting_name = model_setting_name
 
     @property
     def model(self) -> Optional[str]:
@@ -68,14 +79,14 @@ class BedrockGemmaProvider:
         except ImportError as exc:
             raise ProviderNotConfiguredError(
                 provider=PROVIDER_NAME,
-                kind="RULE_EXTRACTION",
+                kind=self._kind,
                 remedy="Install boto3: pip install boto3.",
             ) from exc
 
         if not self._region and not (os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")):
             raise ProviderNotConfiguredError(
                 provider=PROVIDER_NAME,
-                kind="RULE_EXTRACTION",
+                kind=self._kind,
                 remedy="Set AI_BEDROCK_REGION (for example, us-east-1).",
             )
         if not os.getenv("AWS_BEARER_TOKEN_BEDROCK"):
@@ -83,7 +94,7 @@ class BedrockGemmaProvider:
                 if boto3.Session(region_name=self._region).get_credentials() is None:
                     raise ProviderNotConfiguredError(
                         provider=PROVIDER_NAME,
-                        kind="RULE_EXTRACTION",
+                        kind=self._kind,
                         remedy=(
                             "Configure AWS credentials or set AWS_BEARER_TOKEN_BEDROCK, and grant "
                             "Bedrock model access."
@@ -94,7 +105,7 @@ class BedrockGemmaProvider:
             except Exception as exc:
                 raise ProviderNotConfiguredError(
                     provider=PROVIDER_NAME,
-                    kind="RULE_EXTRACTION",
+                    kind=self._kind,
                     remedy=f"Could not resolve AWS credentials: {type(exc).__name__}: {exc}",
                 ) from exc
 
@@ -107,7 +118,7 @@ class BedrockGemmaProvider:
         except Exception as exc:
             raise ProviderNotConfiguredError(
                 provider=PROVIDER_NAME,
-                kind="RULE_EXTRACTION",
+                kind=self._kind,
                 remedy=(
                     "Could not create a bedrock-runtime client. Check AWS credentials, "
                     f"AI_BEDROCK_REGION, and model access. Cause: {type(exc).__name__}: {exc}"
@@ -154,18 +165,63 @@ class BedrockGemmaProvider:
         self,
         prompt: str,
         *,
+        images: Optional[list[dict[str, Any]]] = None,
         max_output_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> str:
+        """Generate text, optionally grounded in one or more images.
+
+        ``images`` is ``[{"bytes": <raw bytes>, "mime_type": "image/png"}, ...]``. When present,
+        ``content`` becomes a list of parts (text + base64 data-URL images) instead of a plain
+        string, following the OpenAI-chat-compatible convention Bedrock marketplace models expose —
+        the same convention already evidenced by the plain-string ``content`` used below.
+
+        **This shape is confirmed accepted by the deployed model.** A PDF sent here as though it were
+        an image came back as ``BadRequestError: cannot identify image file <_io.BytesIO ...>`` — a
+        Pillow error raised *inside the model container*, which means the endpoint had already parsed
+        ``messages``, found the ``image_url`` part and base64-decoded it before reaching its image
+        decoder. The envelope was never the problem; the media was. What callers owe this method is
+        therefore real, decodable image bytes — see :mod:`app.ai.classification.document_render`,
+        which rasterizes PDFs and normalizes exotic formats for exactly this reason.
+
+        Non-image parts are dropped rather than sent, so a caller that gets this wrong loses the
+        image and still gets a text-only answer instead of a failed request.
+        """
         if not self._model:
             raise ProviderNotConfiguredError(
                 provider=PROVIDER_NAME,
-                kind="RULE_EXTRACTION",
-                remedy="Set AI_RULE_EXTRACTION_MODEL to the Bedrock model ID to use.",
+                kind=self._kind,
+                remedy=f"Set {self._model_setting_name} to the Bedrock model ID to use.",
             )
         client = self._bedrock()
+        content: Any = prompt
+        if images:
+            parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+            for image in images:
+                data = image.get("bytes")
+                if not data:
+                    continue
+                mime_type = image.get("mime_type")
+                if not mime_type or not mime_type.startswith("image/"):
+                    # Anything else (a PDF being the case that actually happened) is rejected by the
+                    # model's image decoder, taking the whole request with it. Dropping the part
+                    # degrades to text-only, which is a usable answer.
+                    logger.warning(
+                        "ai.bedrock.non_image_part_skipped",
+                        extra={"mimeType": mime_type, "bytes": len(data)},
+                    )
+                    continue
+                encoded = base64.b64encode(data).decode("ascii")
+                parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
+                    }
+                )
+            if len(parts) > 1:
+                content = parts
         request = {
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": content}],
             "max_tokens": self._max_output_tokens if max_output_tokens is None else max_output_tokens,
             "temperature": self._temperature if temperature is None else temperature,
         }
@@ -196,7 +252,7 @@ class BedrockGemmaProvider:
             ):
                 raise ProviderNotConfiguredError(
                     provider=PROVIDER_NAME,
-                    kind="RULE_EXTRACTION",
+                    kind=self._kind,
                     remedy=(
                         f"Enable model access for '{self._model}' in the selected Bedrock region "
                         f"and verify IAM permissions. Cause: {name}: {message}"

@@ -69,11 +69,13 @@ def test_revision_graph_is_complete_and_joined():
     AI-platform line, which ``0007_merge_heads`` rejoins. ``0009_candidate_policy_rules`` forked the
     same way into a claim line and a candidate-policy line, which ``0013_merge_heads`` rejoins — so
     this asserts set membership plus the edges that define each fork, rather than a single ordered
-    walk.
+    walk. ``0014_item_ai_classification`` is a plain linear continuation from the ``0013`` join, not
+    another fork.
     """
     script = ScriptDirectory.from_config(alembic_config())
     revisions = {r.revision for r in script.walk_revisions()}
     assert revisions == {
+        "0014_item_ai_classification",
         "0013_merge_heads",
         "0012_limit_expression_unbounded",
         "0012_category_custom_fields",
@@ -112,6 +114,9 @@ def test_revision_graph_is_complete_and_joined():
         "0012_category_custom_fields",
         "0012_limit_expression_unbounded",
     }
+
+    # The current head is a plain continuation of the second join, not a third fork.
+    assert script.get_revision("0014_item_ai_classification").down_revision == "0013_merge_heads"
 
 
 def test_every_revision_defines_a_downgrade():

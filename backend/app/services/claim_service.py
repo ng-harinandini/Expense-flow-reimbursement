@@ -6,7 +6,8 @@ routes touches the ORM, which is the layering Phase 1 introduces:
     route  ->  service  ->  repository  ->  database
 
 The submission pipeline reproduces the behaviour the in-memory implementation had (policy
-evaluation, then fraud screening, then routing), with two differences that matter:
+evaluation, then fraud screening, then routing), with one advisory pre-policy addition for document
+classification and two persistence differences that matter:
 
 * every step is a *guarded* lifecycle transition, so the claim's own history is a complete and
   gap-free record of how it reached its current state, and
@@ -59,6 +60,7 @@ from app.services.fraud_engine import screen_for_anomalies
 from app.services.mappers import item_to_engine_input, items_to_engine_corpus
 from app.services.policy_engine import evaluate_expense_policy
 from app.services.policy_rule_service import PolicyRuleService
+from app.services.s3_service import S3DownloadError, download_receipt_from_s3
 
 logger = get_logger(__name__)
 
@@ -130,6 +132,35 @@ class DuplicateDetectionRecorder(Protocol):
         ...
 
 
+@runtime_checkable
+class DocumentClassificationRecorder(Protocol):
+    """The one AI-platform capability ``ClaimService`` depends on for document classification:
+    classifying one item's receipt against the closed category list and, when it matches the
+    employee's own selection with enough confidence, extracting that category's fields.
+    Deliberately narrower than the full ``DocumentClassificationService`` — every argument is a
+    primitive or a stdlib type, so this Protocol (and this module) never needs to import anything
+    under ``app.ai`` beyond ``app.ai.core.enums``, the same boundary ``DuplicateDetectionRecorder``
+    keeps above. See ``app.ai.classification.service.DocumentClassificationService.
+    classify_and_extract``, which satisfies this shape. The return value is a plain dict — this
+    service never writes to an ``ExpenseItem`` column; ``ClaimService`` does that itself.
+    """
+
+    def classify_and_extract(
+        self,
+        *,
+        ocr_text: Optional[str],
+        ocr_is_fallback: bool,
+        has_receipt: bool,
+        image_bytes: Optional[bytes],
+        image_mime_type: Optional[str],
+        employee_category: str,
+        claim_id: Optional[uuid.UUID],
+        expense_item_id: Optional[uuid.UUID],
+        actor_sub: Optional[str],
+    ) -> dict[str, Any]:
+        ...
+
+
 class ClaimService:
     """Business operations on claims. One instance per request (see ``app.core.deps``)."""
 
@@ -144,6 +175,7 @@ class ClaimService:
         audit_service: AuditService,
         decision_memory: Optional[DecisionMemoryRecorder] = None,
         duplicate_detection: Optional[DuplicateDetectionRecorder] = None,
+        document_classification: Optional[DocumentClassificationRecorder] = None,
     ) -> None:
         self._claims = claim_repository
         self._fraud = fraud_repository
@@ -156,6 +188,7 @@ class ClaimService:
         # silently disabled here that was not disabled already by whoever chose not to wire one in.
         self._decision_memory = decision_memory
         self._duplicate_detection = duplicate_detection
+        self._document_classification = document_classification
 
     def _remember(
         self, kind: DecisionMemoryKind, subject_id: object, summary: str, *, actor: Actor
@@ -605,10 +638,11 @@ class ClaimService:
         policy_reports: list[dict[str, Any]] = []
         fraud_reports: list[dict[str, Any]] = []
         for item in claim.items:
+            classification_report = self._classify_item_category(item, claim=claim, actor=actor)
             engine_input = item_to_engine_input(item, claim=claim)
             policy_report = self._evaluate_item_policy(item, claim=claim, rules=rules)
             fraud_report = self._screen_item_fraud(item, claim=claim, corpus=corpus)
-            item.status = self._route_item(policy_report, fraud_report)
+            item.status = self._route_item(policy_report, fraud_report, classification_report)
             policy_reports.append(policy_report)
             fraud_reports.append(fraud_report)
             corpus.append(engine_input)
@@ -692,6 +726,133 @@ class ClaimService:
         )
         return report
 
+    def _classify_item_category(
+        self, item: ExpenseItem, *, claim: Claim, actor: Actor
+    ) -> Optional[dict[str, Any]]:
+        """Classify one item's receipt against the closed category list, when the capability is on.
+
+        Returns ``None`` when the capability is disabled, or the outcome was a silent no-op
+        (nothing to classify from and no receipt was ever claimed) — ``_route_item`` treats
+        ``None`` the same as "nothing to flag". Assigns the AI's verdict onto ``item`` itself,
+        mirroring how ``_evaluate_item_policy``/``_screen_item_fraud`` write their engines'
+        reports. ``item.category`` — the employee's own selection — is never written here.
+        """
+        if self._document_classification is None:
+            return None
+
+        extracted = item.ocr_extracted_json if isinstance(item.ocr_extracted_json, dict) else None
+        ocr_text = receipt_extraction.flatten_extraction_for_prompt(extracted) if extracted else None
+        has_receipt = bool(item.file_url) or extracted is not None
+        if not has_receipt:
+            return None
+
+        log_context = {
+            "claimId": str(claim.id),
+            "claimNumber": claim.claim_number,
+            "itemId": str(item.id),
+            "lineNumber": item.line_number,
+            "employeeCategory": item.category,
+            "hasOcrText": ocr_text is not None,
+            "hasFileUrl": bool(item.file_url),
+            "mimeType": item.mime_type,
+        }
+        logger.info("claim.classification.started", extra=log_context)
+
+        image_bytes: Optional[bytes] = None
+        image_mime_type: Optional[str] = None
+        key = receipt_extraction.parse_object_key(item.file_url) if item.file_url else None
+        if key:
+            try:
+                image_bytes, image_mime_type = download_receipt_from_s3(key)
+                # S3 only echoes a ContentType if one was stored; fall back to the upload's own
+                # declared type, mirroring the receipt-viewer path in app/api/expense_items.py.
+                # Either way it is a hint only — the classification layer sniffs the real type from
+                # the bytes before deciding whether it can be sent as an image.
+                image_mime_type = image_mime_type or item.mime_type
+            except S3DownloadError as exc:
+                # Advisory-only capability: a storage hiccup here must not block claim submission,
+                # unlike the receipt-viewer download path, which has no fallback to degrade to.
+                logger.warning(
+                    "claim.classification.receipt_fetch_failed",
+                    extra={"itemId": str(item.id), "error": str(exc)[:200]},
+                )
+
+        try:
+            report = self._document_classification.classify_and_extract(
+                ocr_text=ocr_text,
+                ocr_is_fallback=item.ocr_source == "fallback",
+                has_receipt=has_receipt,
+                image_bytes=image_bytes,
+                image_mime_type=image_mime_type,
+                employee_category=item.category,
+                claim_id=claim.id,
+                expense_item_id=item.id,
+                actor_sub=actor.sub,
+            )
+        except Exception as exc:
+            logger.exception(
+                "claim.classification.failed",
+                extra={**log_context, "error": str(exc)[:300]},
+            )
+            report = {
+                "documentType": None,
+                "suggestedCategory": None,
+                "confidence": None,
+                "categoryMismatch": False,
+                "categoryReviewRequired": True,
+                "extractedFields": None,
+                "notes": f"Document classification failed: {exc}"[:1000],
+            }
+
+        item.ai_document_type = report.get("documentType")
+        item.ai_suggested_category = report.get("suggestedCategory")
+        confidence = report.get("confidence")
+        item.ai_classification_confidence = (
+            Decimal(str(confidence)) if confidence is not None else None
+        )
+        item.category_mismatch = bool(report.get("categoryMismatch"))
+        item.category_review_required = bool(report.get("categoryReviewRequired"))
+        item.ai_category_fields = report.get("extractedFields")
+        item.ai_classification_notes = report.get("notes")
+
+        classification_log = {
+            **log_context,
+            "documentType": item.ai_document_type,
+            "suggestedCategory": item.ai_suggested_category,
+            "confidence": str(item.ai_classification_confidence)
+            if item.ai_classification_confidence is not None
+            else None,
+            "categoryMismatch": item.category_mismatch,
+            "categoryReviewRequired": item.category_review_required,
+            "notes": item.ai_classification_notes,
+        }
+        if item.ai_document_type is None and item.category_review_required:
+            logger.warning("claim.classification.failed", extra=classification_log)
+        else:
+            logger.info("claim.classification.succeeded", extra=classification_log)
+
+        if item.ai_document_type is None and not item.category_review_required:
+            return None  # silent no-op: nothing worth recording in the claim's history
+
+        if item.category_review_required:
+            action = "Flagged for manual review: " + (
+                report.get("notes") or "category mismatch or insufficient confidence"
+            )
+        else:
+            pct = f"{confidence * 100:.0f}%" if confidence is not None else "unknown"
+            action = f"AI classification matched employee category '{item.category}' (confidence {pct})"
+
+        self._claims.record_step(
+            claim,
+            actor_name="ExpenseFlow Document Classifier",
+            actor_role="admin",
+            step_name=f"Category Classification (item {item.line_number})",
+            action=action,
+            notes=report.get("notes"),
+            outcome="FAILED" if item.category_review_required else "SUCCESS",
+        )
+        return report
+
     def _record_claim_fraud_result(
         self, claim: Claim, reports: list[dict[str, Any]]
     ) -> None:
@@ -723,14 +884,24 @@ class ClaimService:
 
     @staticmethod
     def _route_item(
-        policy_report: dict[str, Any], fraud_report: dict[str, Any]
+        policy_report: dict[str, Any],
+        fraud_report: dict[str, Any],
+        classification_report: Optional[dict[str, Any]] = None,
     ) -> ExpenseItemStatus:
-        """Destination for one evaluated item. Thresholds unchanged from the claim-level routing."""
+        """Destination for one evaluated item. Thresholds unchanged from the claim-level routing.
+
+        ``classification_report`` only ever pushes an otherwise-clean item to ``POLICY_HOLD`` — the
+        same "ask a human" status a policy violation already uses. This is the one place the new
+        document-classification capability affects routing; the policy/fraud engines themselves
+        (``evaluate_expense_policy``/``screen_for_anomalies``) are unchanged.
+        """
         if fraud_report["isFlagged"] and fraud_report["riskScore"] >= FRAUD_ROUTING_THRESHOLD:
             return ExpenseItemStatus.FRAUD_FLAG
         if not policy_report.get("overallPassed"):
             return ExpenseItemStatus.POLICY_HOLD
         if policy_report.get("requiresManualReview"):
+            return ExpenseItemStatus.POLICY_HOLD
+        if classification_report and classification_report.get("categoryReviewRequired"):
             return ExpenseItemStatus.POLICY_HOLD
         return ExpenseItemStatus.AUTO_APPROVED
 

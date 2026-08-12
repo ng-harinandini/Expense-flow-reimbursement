@@ -176,6 +176,44 @@ def summarize_extraction(extraction: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def flatten_extraction_for_prompt(extraction: Dict[str, Any]) -> str:
+    """Render ``summary``/``lineItems`` as compact text for an LLM prompt.
+
+    ``extraction`` (``ocr_extracted_json``) also carries ``rawTextract`` — the verbatim
+    ``AnalyzeExpense`` API response — which is large and has no signal value for a model deciding
+    what kind of document this is. Only the already-normalized summary fields and line items are
+    rendered; ``rawTextract`` is never included.
+    """
+    summary = extraction.get("summary") or {}
+    lines: list[str] = []
+
+    for label, key in (
+        ("Vendor", "vendorName"),
+        ("Date", "transactionDate"),
+        ("Total", "totalAmount"),
+        ("Currency", "currency"),
+    ):
+        value = summary.get(key)
+        if value not in (None, ""):
+            lines.append(f"{label}: {value}")
+
+    for field in summary.get("fields") or []:
+        field_type = field.get("fieldType")
+        value = field.get("value")
+        if field_type and value not in (None, ""):
+            lines.append(f"{field_type}: {value}")
+
+    line_items = extraction.get("lineItems") or []
+    if line_items:
+        lines.append("Line items:")
+        for item in line_items:
+            description = item.get("description") or "(no description)"
+            amount = item.get("amount")
+            lines.append(f"- {description}" + (f" — {amount}" if amount not in (None, "") else ""))
+
+    return "\n".join(lines)
+
+
 def resolve_field(
     field: str,
     *,

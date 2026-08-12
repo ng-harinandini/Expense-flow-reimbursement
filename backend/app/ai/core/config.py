@@ -171,6 +171,37 @@ class AISettings(BaseSettings):
     # no code deploy touching the extraction pipeline itself.
     RULE_EXTRACTION_PROMPT_VERSION: str = "v3"
 
+    # --- expense document classification -------------------------------------
+    # Separate from rule extraction for the same reason rule extraction is separate from advisory
+    # LLM explanations: this capability makes a comparison against the employee's own submission and
+    # deserves its own provider/model switch, independent of any other Bedrock-backed feature.
+    CLASSIFICATION_ENABLED: bool = False
+    CLASSIFICATION_PROVIDER: str = "bedrock"  # bedrock only, for now
+    # Required at runtime; keep model selection entirely in the deployment environment.
+    CLASSIFICATION_MODEL: Optional[str] = None
+    CLASSIFICATION_MAX_OUTPUT_TOKENS: int = 1024
+    # Below this, a name match is still flagged for manual review rather than trusted outright.
+    CLASSIFICATION_MIN_CONFIDENCE: float = 0.7
+    # Kill switch for the multimodal path: set false to classify from OCR text alone, which is the
+    # fallback the layer already degrades to whenever a receipt cannot be turned into an image.
+    CLASSIFICATION_INCLUDE_IMAGE: bool = True
+    # How many pages of a PDF receipt are rasterized and sent (app/ai/classification/document_render).
+    # Multiple image parts per request were verified against the deployed google.gemma-3-12b-it on
+    # 2026-08-12: a two-page invoice was sent and the model correctly reported seeing both. Capped at
+    # 3 because every page is another image in a request that runs synchronously inside claim
+    # submission — this is a latency and cost ceiling, not a capability one. Pages beyond the cap are
+    # counted and logged rather than silently dropped. Set to 1 to send page 1 only.
+    CLASSIFICATION_MAX_PDF_PAGES: int = 3
+    # Render scale for those pages: 2.0 is ~144 DPI, comfortably legible for receipt text while
+    # keeping the base64 payload small. The rendered page is still capped at 2000px on its longest
+    # edge by document_render, so raising this mostly costs CPU rather than request size.
+    CLASSIFICATION_PDF_RENDER_SCALE: float = 2.0
+    # Tighter than LLM_TIMEOUT_SECONDS (measured at 150s for rule extraction's much larger
+    # per-window output): a single claim submission can classify several items in sequence, so one
+    # slow call must not be allowed to eat the whole request. Classification/extraction prompts are
+    # short and the output budget is small, so 30s leaves headroom without risking a truncated call.
+    CLASSIFICATION_TIMEOUT_SECONDS: float = 30.0
+
     # --- caching (Task 15) --------------------------------------------------
     CACHE_BACKEND: Literal["memory", "redis", "none"] = "memory"
     CACHE_REDIS_URL: Optional[str] = None
@@ -234,7 +265,7 @@ class AISettings(BaseSettings):
         "DUP_OCR_SIMILARITY_THRESHOLD", "DUP_EMBEDDING_SIMILARITY_THRESHOLD",
         "DUP_VENDOR_ALIAS_THRESHOLD", "DUP_INVOICE_SIMILARITY_THRESHOLD",
         "DUP_NEAR_DUPLICATE_THRESHOLD", "DUP_LIKELY_SCORE", "DUP_CONFIRMED_SCORE",
-        "CHUNK_SEMANTIC_THRESHOLD",
+        "CHUNK_SEMANTIC_THRESHOLD", "CLASSIFICATION_MIN_CONFIDENCE",
     )
     @classmethod
     def _similarity_range(cls, v: float) -> float:
@@ -247,6 +278,22 @@ class AISettings(BaseSettings):
     def _overlap_sane(cls, v: int) -> int:
         if v < 0:
             raise ValueError("AI_CHUNK_OVERLAP_TOKENS must be >= 0.")
+        return v
+
+    @field_validator("CLASSIFICATION_MAX_PDF_PAGES")
+    @classmethod
+    def _pdf_pages_range(cls, v: int) -> int:
+        # Upper bound is a cost guard as much as a correctness one: every page is another image in a
+        # request that runs synchronously inside claim submission.
+        if not 1 <= v <= 3:
+            raise ValueError("AI_CLASSIFICATION_MAX_PDF_PAGES must be between 1 and 3.")
+        return v
+
+    @field_validator("CLASSIFICATION_PDF_RENDER_SCALE")
+    @classmethod
+    def _pdf_scale_range(cls, v: float) -> float:
+        if not 1.0 <= v <= 4.0:
+            raise ValueError("AI_CLASSIFICATION_PDF_RENDER_SCALE must be between 1.0 and 4.0.")
         return v
 
     # --- derived ------------------------------------------------------------

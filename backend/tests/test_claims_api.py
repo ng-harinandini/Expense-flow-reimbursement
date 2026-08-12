@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, timedelta
+from typing import Any
 
 import pytest
 
+from app.core import deps
+from app.main import app
 from app.models.enums import ClaimStatus
-from tests.conftest import (
+from conftest import (
     SEED_EMPLOYEE_CODE,
     SEED_MANAGER_CODE,
     SEED_OTHER_EMPLOYEE_CODE,
@@ -81,6 +84,162 @@ def test_policy_validation_block_keeps_its_field_names(client):
         "overallPassed", "requiresManualReview", "maxLimitAllowed", "autoApproveLimit",
         "checks", "reasoningSummary",
     }
+
+
+class _RecordingDocumentClassifier:
+    def __init__(self, **report_overrides: Any) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._report = {
+            "documentType": "receipt",
+            "suggestedCategory": "Meals",
+            "confidence": 0.91,
+            "categoryMismatch": False,
+            "categoryReviewRequired": False,
+            "extractedFields": {"mealType": "team_lunch"},
+            "notes": "Matched Meals.",
+        }
+        self._report.update(report_overrides)
+
+    def classify_and_extract(self, **kwargs) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        return dict(self._report)
+
+
+def _classified_claim_payload(**item_overrides: Any) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "category": "Meals",
+        "subCategory": "Team Lunch",
+        "amount": 22.50,
+        "amountUSD": 22.50,
+        "currency": "USD",
+        "merchantVendor": f"Vendor {uuid.uuid4().hex[:8]}",
+        "expenseDate": (date.today() - timedelta(days=1)).isoformat(),
+        "purposeDescription": "Team sync lunch.",
+        "receiptAttached": True,
+        "ocrExtractedJson": {
+            "vendorName": "Cafe Example",
+            "transactionDate": (date.today() - timedelta(days=1)).isoformat(),
+            "totalAmount": 22.50,
+            "currency": "USD",
+        },
+    }
+    item.update(item_overrides)
+    return {"title": "Classified receipt", "currency": "USD", "items": [item]}
+
+
+def test_document_classification_runs_during_claim_submission_and_is_returned(client):
+    classifier = _RecordingDocumentClassifier()
+    app.dependency_overrides[deps.get_optional_document_classification] = lambda: classifier
+
+    as_role("employee", employee_id=SEED_EMPLOYEE_CODE)
+    response = client.post(
+        "/api/claims",
+        json={
+            "title": "Classified receipt",
+            "currency": "USD",
+            "items": [
+                {
+                    "category": "Meals",
+                    "subCategory": "Team Lunch",
+                    "amount": 22.50,
+                    "amountUSD": 22.50,
+                    "currency": "USD",
+                    "merchantVendor": f"Vendor {uuid.uuid4().hex[:8]}",
+                    "expenseDate": (date.today() - timedelta(days=1)).isoformat(),
+                    "purposeDescription": "Team sync lunch.",
+                    "receiptAttached": True,
+                    "ocrExtractedJson": {
+                        "vendorName": "Cafe Example",
+                        "transactionDate": (date.today() - timedelta(days=1)).isoformat(),
+                        "totalAmount": 22.50,
+                        "currency": "USD",
+                    },
+                }
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+    claim = response.json()
+
+    assert len(classifier.calls) == 1
+    assert classifier.calls[0]["employee_category"] == "Meals"
+    assert classifier.calls[0]["ocr_text"]
+
+    item = claim["items"][0]
+    assert item["documentClassification"] == {
+        "documentType": "receipt",
+        "suggestedCategory": "Meals",
+        "confidence": 0.91,
+        "categoryMismatch": False,
+        "needsManualReview": False,
+        "extractedFields": {"mealType": "team_lunch"},
+        "notes": "Matched Meals.",
+    }
+
+    history_steps = [step["stepName"] for step in claim["workflowHistory"]]
+    assert history_steps.index("Category Classification (item 1)") < history_steps.index(
+        "Policy Validation (item 1)"
+    )
+
+    as_role("employee", employee_id=SEED_EMPLOYEE_CODE)
+    fetched = client.get(f"/api/claims/{claim['claimNumber']}")
+    assert fetched.status_code == 200
+    assert fetched.json()["items"][0]["documentClassification"] == item["documentClassification"]
+
+
+def test_classification_review_flag_holds_the_item_without_disturbing_policy_or_fraud(client):
+    """``categoryReviewRequired`` is the one way classification touches routing: a clean item is
+    held for a human instead of auto-approving. The policy and fraud engines still run and still
+    report — the failure mode being guarded against is a classification change quietly becoming a
+    second, competing verdict.
+    """
+    classifier = _RecordingDocumentClassifier(
+        categoryReviewRequired=True,
+        confidence=0.42,
+        notes="AI classification unavailable.",
+        extractedFields=None,
+    )
+    app.dependency_overrides[deps.get_optional_document_classification] = lambda: classifier
+
+    as_role("employee", employee_id=SEED_EMPLOYEE_CODE)
+    response = client.post("/api/claims", json=_classified_claim_payload())
+    assert response.status_code == 201, response.text
+    claim = response.json()
+    item = claim["items"][0]
+
+    assert item["documentClassification"]["needsManualReview"] is True
+    assert item["status"] == "Policy_Hold"
+    assert claim["status"] == "Manager_Review"
+
+    # The engines were not skipped, short-circuited, or overwritten by the classification verdict.
+    assert item["policyValidation"] is not None
+    assert item["policyValidation"]["overallPassed"] is True
+    assert item["fraudScreening"] is not None
+    history_steps = [step["stepName"] for step in claim["workflowHistory"]]
+    assert history_steps.index("Category Classification (item 1)") < history_steps.index(
+        "Policy Validation (item 1)"
+    )
+
+
+def test_classification_failure_does_not_break_submission(client):
+    """Requirement 6 at the API boundary: a provider blow-up still yields a 201 and a held item."""
+
+    class _ExplodingClassifier:
+        def classify_and_extract(self, **kwargs) -> dict[str, Any]:
+            raise RuntimeError("Provider 'bedrock' failed: ValidationException")
+
+    app.dependency_overrides[deps.get_optional_document_classification] = _ExplodingClassifier
+
+    as_role("employee", employee_id=SEED_EMPLOYEE_CODE)
+    response = client.post("/api/claims", json=_classified_claim_payload())
+
+    assert response.status_code == 201, response.text
+    claim = response.json()
+    item = claim["items"][0]
+    assert item["documentClassification"]["needsManualReview"] is True
+    assert item["documentClassification"]["documentType"] is None
+    assert item["status"] == "Policy_Hold"
+    assert item["policyValidation"] is not None  # the rest of the pipeline still ran
 
 
 def test_list_claims_returns_a_bare_array(client):

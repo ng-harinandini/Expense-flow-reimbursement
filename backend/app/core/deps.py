@@ -23,6 +23,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.ai.classification.service import DocumentClassificationService
 from app.ai.duplicate_detection.service import DuplicateDetectionService
 from app.ai.governance.feature_flags import PersistedFeatureFlagStore
 from app.ai.knowledge.service import KnowledgeService
@@ -233,6 +234,26 @@ def get_optional_duplicate_detection(
     return duplicate_detection_service
 
 
+def get_document_classification_service(
+    category_repository: CategoryRepository = Depends(get_category_repository),
+    ai_inference_repository: AIInferenceRepository = Depends(get_ai_inference_repository),
+) -> DocumentClassificationService:
+    return DocumentClassificationService(category_repository, ai_inference_repository)
+
+
+def get_optional_document_classification(
+    service: DocumentClassificationService = Depends(get_document_classification_service),
+) -> Optional[DocumentClassificationService]:
+    """``ClaimService``'s document-classification dependency, or ``None`` when the feature is off.
+
+    Same reasoning as :func:`get_optional_decision_memory`: the flag is decided here, not inside
+    ``ClaimService``, so disabling it leaves the claim pipeline byte-identical to today.
+    """
+    if not feature_flags.is_enabled("ai.category_classification"):
+        return None
+    return service
+
+
 def get_audit_service(
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
 ) -> AuditService:
@@ -287,6 +308,9 @@ def get_claim_service(
     duplicate_detection: Optional[DuplicateDetectionService] = Depends(
         get_optional_duplicate_detection
     ),
+    document_classification: Optional[DocumentClassificationService] = Depends(
+        get_optional_document_classification
+    ),
 ) -> ClaimService:
     return ClaimService(
         claim_repository=claim_repository,
@@ -297,4 +321,5 @@ def get_claim_service(
         audit_service=audit_service,
         decision_memory=decision_memory,
         duplicate_detection=duplicate_detection,
+        document_classification=document_classification,
     )
