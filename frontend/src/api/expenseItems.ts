@@ -2,6 +2,19 @@ import { axiosInstance } from "@/lib/axios";
 
 import { apiUpload } from "./client";
 
+export interface CategoryFields {
+  expense_category?: string;
+  total_amount?: number;
+  currency?: string;
+  invoice_from_date?: string;
+  invoice_to_date?: string;
+  vendor_name?: string;
+  invoice_number?: string;
+  travel_route?: string;
+  travel_type?: string;
+  number_of_attendees?: number;
+}
+
 export interface ReceiptExtraction {
   // --- stored-file provenance, echoed back verbatim at submit time ---
   fileUrl: string | null;
@@ -36,7 +49,7 @@ export interface ReceiptExtraction {
   /** What the document is, e.g. "hotel invoice" — a label, not a category. */
   documentType: string | null;
   /** Values for the suggested category's custom fields, keyed by field name. Not rendered yet. */
-  categoryFields: Record<string, unknown> | null;
+  categoryFields: CategoryFields | null;
   // --- advisory, never blocking ---
   duplicateOfClaimNumber: string | null;
   errorMessage: string | null;

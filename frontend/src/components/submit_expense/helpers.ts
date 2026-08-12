@@ -54,6 +54,39 @@ export const EXPENSE_CATEGORIES = [
   "Miscellaneous / Others",
 ];
 
+export const CURRENCY_CODES = [
+  "INR",
+  "USD",
+  "EUR",
+  "GBP",
+  "AUD",
+  "BRL",
+  "CAD",
+  "CHF",
+  "CNY",
+  "CZK",
+  "DKK",
+  "HKD",
+  "HUF",
+  "IDR",
+  "ILS",
+  "ISK",
+  "JPY",
+  "KRW",
+  "MXN",
+  "MYR",
+  "NOK",
+  "NZD",
+  "PHP",
+  "PLN",
+  "RON",
+  "SEK",
+  "SGD",
+  "THB",
+  "TRY",
+  "ZAR",
+];
+
 export const MAX_EXPENSE_ITEMS = 10;
 
 export const CATEGORY_ICONS: Record<string, LucideIcon> = {

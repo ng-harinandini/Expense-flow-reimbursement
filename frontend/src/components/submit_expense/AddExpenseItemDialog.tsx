@@ -6,12 +6,15 @@ import { yupResolver } from "@hookform/resolvers/yup";
 import {
   AlertTriangle,
   Calendar,
-  CreditCard,
   DollarSign,
+  Hash,
   Percent,
+  Plane,
+  Route,
   Sparkles,
   Store,
   Tag,
+  Users,
 } from "lucide-react";
 
 import { useCategoriesQuery } from "@/api/categories";
@@ -31,7 +34,6 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/Label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/Button";
 import { ReceiptDropzone } from "@/components/submit_expense/ReceiptDropzone";
 import {
@@ -40,6 +42,7 @@ import {
   type ExpenseItemFormValues,
 } from "@/components/submit_expense/expenseItemSchema";
 import {
+  CURRENCY_CODES,
   EXPENSE_CATEGORIES,
   generateItemId,
   readFileAsDataUrl,
@@ -80,7 +83,6 @@ export function AddExpenseItemDialog({
     register,
     handleSubmit,
     reset,
-    setValue,
     watch,
     formState: { errors, isSubmitting },
   } = useForm<ExpenseItemFormValues>({
@@ -180,41 +182,47 @@ export function AddExpenseItemDialog({
     }
   };
 
-  /** Writes the server's suggestions into the form as editable defaults. */
+  /** `yyyy-MM-dd` prefix of an ISO date string, or `""` if `value` isn't one. */
+  const asIsoDate = (value: string | undefined) => value?.slice(0, 10) ?? "";
+
+
+  const matchOption = (options: readonly string[], value: string | undefined) =>
+    options.find((option) => option.toLowerCase() === value?.toLowerCase());
+
+  /** Writes the server's suggestions into the form as editable defaults, in one `reset()` call. */
   const applyPrefill = (result: ReceiptExtraction) => {
-    if (result.suggestedVendor) {
-      setValue("merchantVendor", result.suggestedVendor, { shouldValidate: true });
-    }
-    if (result.suggestedDate) {
-      // The date input needs yyyy-MM-dd; anything else is left for the user.
-      const date = result.suggestedDate.slice(0, 10);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        setValue("expenseFromDate", date, { shouldValidate: true });
-        setValue("expenseToDate", date, { shouldValidate: true });
-      }
-    }
-    if (typeof result.suggestedAmount === "number") {
-      setValue("amount", result.suggestedAmount, { shouldValidate: true });
-    }
-    // Parse tax from extraction fields (e.g. { fieldType: "TAX", fieldValue: "$24.96" })
-    const fields = (result.extraction?.fields as Array<{ fieldType: string; fieldValue: string }> | undefined) ?? [];
-    const taxField = fields.find((f) => f.fieldType === "TAX");
-    if (taxField) {
-      const taxValue = parseFloat(taxField.fieldValue.replace(/[^\d.]/g, ""));
-      if (!Number.isNaN(taxValue)) {
-        setValue("taxAmount", taxValue, { shouldValidate: true });
-      }
-    }
-    if (result.suggestedCategory) {
-      // Only ever set a value that has a matching <option>. A name with none renders the select
-      // blank while the form value is non-empty — and `category` is only `string().required()`, so
-      // validation would still pass and the user would submit a category they never saw. The
-      // dropdown and the server read the same category list, so a miss here means the list changed
-      // mid-session or the query hasn't landed and we're on the fallback.
-      const suggested = result.suggestedCategory.trim().toLowerCase();
-      const match = categoryOptions.find((option) => option.toLowerCase() === suggested);
-      if (match) setValue("category", match, { shouldValidate: true });
-    }
+    const fields = result.categoryFields ?? {};
+
+    const rawFields =
+      (result.extraction?.fields as Array<{ fieldType: string; fieldValue: string }> | undefined) ?? [];
+    const taxText = rawFields.find((f) => f.fieldType === "TAX")?.fieldValue;
+    const taxValue = taxText ? parseFloat(taxText.replace(/[^\d.]/g, "")) : NaN;
+
+    const category = matchOption(categoryOptions, fields.expense_category ?? result.suggestedCategory ?? undefined);
+    const currency = matchOption(
+      CURRENCY_CODES,
+      (fields.currency ?? result.suggestedCurrency ?? undefined)?.toUpperCase()
+    );
+    const fromDate = asIsoDate(fields.invoice_from_date) || asIsoDate(result.suggestedDate ?? undefined);
+    const toDate = asIsoDate(fields.invoice_to_date) || fromDate;
+
+    reset(
+      (current) => ({
+        ...current,
+        ...(category && { category }),
+        ...(currency && { currency }),
+        amount: fields.total_amount ?? result.suggestedAmount ?? current.amount,
+        ...(!Number.isNaN(taxValue) && { taxAmount: taxValue }),
+        ...(fromDate && { expenseFromDate: fromDate }),
+        ...(toDate && { expenseToDate: toDate }),
+        merchantVendor: fields.vendor_name ?? result.suggestedVendor ?? current.merchantVendor,
+        invoiceNumber: fields.invoice_number ?? current.invoiceNumber,
+        travelRoute: fields.travel_route ?? current.travelRoute,
+        travelType: fields.travel_type ?? current.travelType,
+        numberOfAttendees: fields.number_of_attendees ?? current.numberOfAttendees,
+      }),
+      { keepDefaultValues: true }
+    );
   };
 
   const handleFileRemoved = () => {
@@ -246,7 +254,7 @@ export function AddExpenseItemDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-5xl">
+      <DialogContent className="flex max-h-[calc(100vh-4rem)] flex-col sm:max-w-5xl">
         <DialogHeader className="pr-8">
           <DialogTitle>{isEditing ? "Edit expense item" : "Add expense item"}</DialogTitle>
           <DialogDescription>
@@ -255,9 +263,9 @@ export function AddExpenseItemDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit(onSubmit)}>
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[35fr_65fr]">
-            <div className="flex flex-col gap-3">
+        <form onSubmit={handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[35fr_65fr] lg:grid-rows-1">
+            <div className="flex flex-col gap-3 self-start">
               {receipt && isExtracted && !extractionError && (
                 <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-primary">
                   <Sparkles className="size-3.5 shrink-0" />
@@ -288,74 +296,15 @@ export function AddExpenseItemDialog({
                 onFileAccepted={handleFileAccepted}
                 onFileRemoved={handleFileRemoved}
                 isScanning={isExtracting}
-                className="flex-1"
               />
             </div>
 
-            <div className="space-y-5">
+            <div className="scrollbar-subtle min-h-0 space-y-5 overflow-y-auto px-1">
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="merchantVendor">Merchant / vendor</Label>
-                  <div className="relative">
-                    <Store className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      id="merchantVendor"
-                      disabled={!fieldsEnabled}
-                      placeholder="e.g. Sweetgreen #104"
-                      aria-invalid={!!errors.merchantVendor}
-                      className="pl-9"
-                      {...register("merchantVendor")}
-                    />
-                  </div>
-                  {errors.merchantVendor && (
-                    <p className="text-xs text-destructive">
-                      {errors.merchantVendor.message}
-                    </p>
-                  )}
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="expenseFromDate">Expense from date</Label>
-                  <div className="relative">
-                    <Calendar className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      id="expenseFromDate"
-                      type="date"
-                      disabled={!fieldsEnabled}
-                      aria-invalid={!!errors.expenseFromDate}
-                      className="pl-9"
-                      {...register("expenseFromDate")}
-                    />
-                  </div>
-                  {errors.expenseFromDate && (
-                    <p className="text-xs text-destructive">
-                      {errors.expenseFromDate.message}
-                    </p>
-                  )}
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="expenseToDate">Expense to date</Label>
-                  <div className="relative">
-                    <Calendar className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      id="expenseToDate"
-                      type="date"
-                      disabled={!fieldsEnabled}
-                      aria-invalid={!!errors.expenseToDate}
-                      className="pl-9"
-                      {...register("expenseToDate")}
-                    />
-                  </div>
-                  {errors.expenseToDate && (
-                    <p className="text-xs text-destructive">
-                      {errors.expenseToDate.message}
-                    </p>
-                  )}
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="category">Category</Label>
+                  <Label htmlFor="category">
+                    Expense Category <span className="text-destructive">*</span>
+                  </Label>
                   <div className="relative">
                     <Tag className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                     <select
@@ -389,7 +338,9 @@ export function AddExpenseItemDialog({
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="amount">Amount</Label>
+                  <Label htmlFor="amount">
+                    Total Amount <span className="text-destructive">*</span>
+                  </Label>
                   <div className="relative">
                     <DollarSign className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
@@ -409,7 +360,33 @@ export function AddExpenseItemDialog({
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="taxAmount">Tax / GST</Label>
+                  <Label htmlFor="currency">
+                    Currency <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Hash className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <select
+                      id="currency"
+                      disabled={!fieldsEnabled}
+                      aria-invalid={!!errors.currency}
+                      className={SELECT_CLASSES}
+                      {...register("currency")}
+                    >
+                      <option value="">Select a currency</option>
+                      {CURRENCY_CODES.map((code) => (
+                        <option key={code} value={code}>
+                          {code}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {errors.currency && (
+                    <p className="text-xs text-destructive">{errors.currency.message}</p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="taxAmount">Tax / GST (optional)</Label>
                   <div className="relative">
                     <Percent className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
@@ -429,28 +406,158 @@ export function AddExpenseItemDialog({
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="paymentMethod">Payment method</Label>
+                  <Label htmlFor="merchantVendor">
+                    Vendor Name <span className="text-destructive">*</span>
+                  </Label>
                   <div className="relative">
-                    <CreditCard className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Store className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
-                      id="paymentMethod"
+                      id="merchantVendor"
                       disabled={!fieldsEnabled}
-                      placeholder="e.g. Corporate card"
-                      aria-invalid={!!errors.paymentMethod}
+                      placeholder="e.g. Sweetgreen #104"
+                      aria-invalid={!!errors.merchantVendor}
                       className="pl-9"
-                      {...register("paymentMethod")}
+                      {...register("merchantVendor")}
                     />
                   </div>
-                  {errors.paymentMethod && (
+                  {errors.merchantVendor && (
                     <p className="text-xs text-destructive">
-                      {errors.paymentMethod.message}
+                      {errors.merchantVendor.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="expenseFromDate">
+                    Invoice From Date <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Calendar className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="expenseFromDate"
+                      type="date"
+                      disabled={!fieldsEnabled}
+                      aria-invalid={!!errors.expenseFromDate}
+                      className="pl-9"
+                      {...register("expenseFromDate")}
+                    />
+                  </div>
+                  {errors.expenseFromDate && (
+                    <p className="text-xs text-destructive">
+                      {errors.expenseFromDate.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="expenseToDate">
+                    Invoice To Date <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Calendar className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="expenseToDate"
+                      type="date"
+                      disabled={!fieldsEnabled}
+                      aria-invalid={!!errors.expenseToDate}
+                      className="pl-9"
+                      {...register("expenseToDate")}
+                    />
+                  </div>
+                  {errors.expenseToDate && (
+                    <p className="text-xs text-destructive">
+                      {errors.expenseToDate.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="invoiceNumber">
+                    Invoice Number <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Hash className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="invoiceNumber"
+                      disabled={!fieldsEnabled}
+                      placeholder="e.g. INV-10293"
+                      aria-invalid={!!errors.invoiceNumber}
+                      className="pl-9"
+                      {...register("invoiceNumber")}
+                    />
+                  </div>
+                  {errors.invoiceNumber && (
+                    <p className="text-xs text-destructive">{errors.invoiceNumber.message}</p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="travelRoute">
+                    Travel Route <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Route className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="travelRoute"
+                      disabled={!fieldsEnabled}
+                      placeholder="e.g. Bengaluru - Mumbai"
+                      aria-invalid={!!errors.travelRoute}
+                      className="pl-9"
+                      {...register("travelRoute")}
+                    />
+                  </div>
+                  {errors.travelRoute && (
+                    <p className="text-xs text-destructive">{errors.travelRoute.message}</p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="travelType">
+                    Travel Type <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Plane className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="travelType"
+                      disabled={!fieldsEnabled}
+                      placeholder="e.g. Flight, Train, Cab"
+                      aria-invalid={!!errors.travelType}
+                      className="pl-9"
+                      {...register("travelType")}
+                    />
+                  </div>
+                  {errors.travelType && (
+                    <p className="text-xs text-destructive">{errors.travelType.message}</p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="numberOfAttendees">No. of Attendees (optional)</Label>
+                  <div className="relative">
+                    <Users className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="numberOfAttendees"
+                      type="number"
+                      step="1"
+                      disabled={!fieldsEnabled}
+                      placeholder="0"
+                      aria-invalid={!!errors.numberOfAttendees}
+                      className="pl-9"
+                      {...register("numberOfAttendees")}
+                    />
+                  </div>
+                  {errors.numberOfAttendees && (
+                    <p className="text-xs text-destructive">
+                      {errors.numberOfAttendees.message}
                     </p>
                   )}
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="description">Business purpose &amp; description</Label>
+                <Label htmlFor="description">
+                  Business purpose &amp; description <span className="text-destructive">*</span>
+                </Label>
                 <Textarea
                   id="description"
                   rows={3}
@@ -466,9 +573,7 @@ export function AddExpenseItemDialog({
             </div>
           </div>
 
-          <Separator className="my-6" />
-
-          <DialogFooter>
+          <DialogFooter className="mt-6 shrink-0">
             <DialogClose asChild>
               <Button type="button" variant="outline">
                 Cancel
