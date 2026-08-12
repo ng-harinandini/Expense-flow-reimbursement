@@ -8,7 +8,7 @@ export const policyRuleSchema = yup.object({
     .typeError("Max amount must be a number")
     .positive("Max amount must be greater than 0")
     .required("Max amount is required"),
-  maxAmountUnit: yup.string().trim().required("Unit is required (e.g. day, trip, night)"),
+  maxAmountUnit: yup.string().trim().required("Unit is required"),
   autoApproveLimit: yup
     .number()
     .typeError("Auto approve limit must be a number")

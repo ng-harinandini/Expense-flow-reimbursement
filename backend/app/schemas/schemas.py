@@ -1,4 +1,4 @@
-from typing import Annotated, Any, Dict, List, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from datetime import date
 from decimal import Decimal
 
@@ -127,7 +127,7 @@ class ExpenseItemCreateSchema(BaseModel):
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
-    category: Optional[str] = Field(default="Misc / Other", max_length=64)
+    category: Optional[str] = Field(default="Miscellaneous / Others", max_length=64)
     subCategory: Optional[str] = Field(default="General Expense", max_length=120)
     amount: Optional[MoneyAmount] = None
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
@@ -290,8 +290,8 @@ class ActionRequestSchema(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     action: str = Field(
-        pattern="^(APPROVE|REJECT|DISBURSE|FLAG_FRAUD)$",
-        description="APPROVE, REJECT, DISBURSE, or FLAG_FRAUD.",
+        pattern="^(APPROVE|REJECT|FLAG_FRAUD)$",
+        description="APPROVE, REJECT, or FLAG_FRAUD.",
     )
     actorName: Optional[str] = Field(default=None, deprecated="Ignored — taken from the token.")
     actorRole: Optional[str] = Field(default=None, deprecated="Ignored — taken from the token.")
@@ -309,6 +309,30 @@ class ActionRequestSchema(BaseModel):
     @classmethod
     def _normalize_action(cls, value: Any) -> Any:
         return value.strip().upper() if isinstance(value, str) else value
+
+
+class WithdrawClaimSchema(BaseModel):
+    """Request body for ``POST /claims/{id}/withdraw``.
+
+    Everything is optional — a withdrawal needs no justification, unlike a rejection. The body may
+    be omitted entirely.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    reason: Optional[str] = Field(
+        default=None,
+        max_length=4000,
+        description="Optional note explaining why the claim was withdrawn.",
+    )
+    expectedVersion: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Claim 'version' from the last read. When supplied, a concurrent decision by a "
+            "reviewer is rejected with 409 instead of racing the withdrawal."
+        ),
+    )
 
 
 class AssignReviewerSchema(BaseModel):
@@ -488,6 +512,53 @@ class PolicyRuleDefinitionSchema(BaseModel):
     effectiveDate: Optional[str] = None
     expirationDate: Optional[str] = None
 
+class CategoryFieldDefinitionSchema(BaseModel):
+    """One entry of ``expense_categories.custom_fields`` — the extraction schema for a category.
+
+    ``name`` is the snake_case machine key later used as the key extraction writes into
+    ``expense_items.ocr_extracted_json``; ``options`` only makes sense (and is only meaningful)
+    when ``data_type == "enum"``, but is not enforced non-empty here since draft rows may be saved
+    mid-edit — the frontend form is what actually requires it before submit.
+    """
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=120)
+    description: Optional[str] = None
+    data_type: Literal["text", "number", "date", "boolean", "enum"] = "text"
+    options: Optional[List[str]] = None
+    required: bool = False
+
+
+class ExpenseCategorySchema(BaseModel):
+    """``expense_categories`` row, as ``GET /categories`` returns it."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    id: Optional[str] = None
+    code: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=64)
+    description: Optional[str] = None
+    displayOrder: int = Field(default=100, ge=0)
+    isActive: bool = True
+    isCommon: bool = False
+    customFields: List[CategoryFieldDefinitionSchema] = Field(default_factory=list)
+
+
+class ExpenseCategoryWriteSchema(BaseModel):
+    """Create/update payload for ``POST``/``PUT /categories``."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    code: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=64)
+    description: Optional[str] = None
+    displayOrder: int = Field(default=100, ge=0)
+    isActive: bool = True
+    customFields: List[CategoryFieldDefinitionSchema] = Field(default_factory=list)
+
+
 class AuditLogEntrySchema(BaseModel):
     id: str
     timestamp: str
@@ -547,7 +618,18 @@ class ReceiptExtractionSchema(BaseModel):
     suggestedDate: Optional[str] = None
     suggestedAmount: Optional[float] = None
     suggestedCurrency: Optional[str] = None
+    #: Only ever populated when ``AI_RECEIPT_EXTRACTION_PROVIDER=bedrock``: Textract transcribes a
+    #: document but has no notion of an expense category. On the Textract path this stays the echo
+    #: of the caller's ``categoryHint`` that it has always been.
     suggestedCategory: Optional[str] = None
+    #: 0-1 confidence in ``suggestedCategory``. ``None`` when nothing classified — deliberately not
+    #: conflated with ``0.0``, which would mean "classified, and certain it is wrong".
+    suggestedCategoryConfidence: Optional[float] = None
+    #: Free-text label for what the document is ("hotel invoice"). Never a category name.
+    documentType: Optional[str] = None
+    #: Values for the suggested category's ``custom_fields`` plus the shared COMMON ones, keyed by
+    #: field ``name``. Returned for the client to present; nothing renders them yet.
+    categoryFields: Optional[Dict[str, Any]] = None
 
     # --- advisory, never blocking ---
     duplicateOfClaimNumber: Optional[str] = None

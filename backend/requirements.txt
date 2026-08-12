@@ -9,6 +9,8 @@ sqlalchemy>=2.0
 alembic>=1.13
 psycopg[binary]>=3.1
 boto3>=1.34
+sshtunnel>=0.4          # optional SSH tunnel to a bastion when DB_HOST is only reachable that way
+paramiko>=3.0           # imported directly by app/core/database.py (DSSKey shim), not just via sshtunnel
 python-dateutil>=2.8
 python-jose[cryptography]>=3.3
 pytest>=7.0
@@ -47,6 +49,14 @@ beautifulsoup4>=4.15.0   # HTML
 # Guarded exactly like the parsers above — its own is_available() check reports False without it,
 # and the SHA-256/OCR/vendor-alias/invoice signals all work with no image library installed at all.
 pillow>=10.0
+
+# Multimodal document classification (T005) needs receipt PDFs as raster images: a vision model
+# decodes them with Pillow, which cannot open a PDF at all, and pypdf above only reads text layers.
+# pypdfium2 ships self-contained wheels of Google's PDFium (no poppler, no system binary, permissive
+# BSD-3/Apache-2.0), so a Windows dev box and a Linux container install it identically. Guarded
+# exactly like pillow above: app/ai/classification/document_render.py reports
+# is_pdf_render_available() False without it and classification degrades to OCR-text-only.
+pypdfium2>=4.30
 
 # Optional extras, all guarded at their import sites and never required by the default path:
 #   redis>=5.0        AI_CACHE_BACKEND=redis (a cache shared across workers)

@@ -8,6 +8,9 @@ export const metadata: Metadata = {
   title: "ExpenseFlow AI - Next.js Enterprise Expense Platform",
   description:
     "Enterprise expense reimbursement platform built with Next.js App Router, Gemini AI OCR, multi-tier policy engine, fraud screening, and AWS serverless architecture.",
+  icons: {
+    icon: "/assets/ngenux-icon.svg",
+  },
 };
 
 export default function RootLayout({

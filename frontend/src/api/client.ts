@@ -13,7 +13,7 @@ export async function apiRequest<T>(
     });
     return response.data;
   } catch (error) {
-    console.error(`API request failed: ${options.method ?? "GET"} ${path}`, error);
+    console.warn(`API request failed: ${options.method ?? "GET"} ${path}`, error);
     throw error;
   }
 }
@@ -41,7 +41,7 @@ export async function apiUpload<T>(
     });
     return response.data;
   } catch (error) {
-    console.error(`API upload failed: ${options.method ?? "POST"} ${path}`, error);
+    console.warn(`API upload failed: ${options.method ?? "POST"} ${path}`, error);
     throw error;
   }
 }

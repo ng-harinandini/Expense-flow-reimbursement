@@ -75,20 +75,20 @@ def test_alcohol_is_not_reimbursable_under_meals(rules):
 
 def test_ground_transport_thresholds(rules):
     within = evaluate_expense_policy(
-        _claim(category="Ground Transport", amountUSD=45.0), rules
+        _claim(category="Taxi / Cab / Ride-hailing", amountUSD=45.0), rules
     )
     assert within["maxLimitAllowed"] == 150.0
     assert within["autoApproveLimit"] == 50.0
     assert within["requiresManualReview"] is False
 
     over_auto = evaluate_expense_policy(
-        _claim(category="Ground Transport", amountUSD=90.0), rules
+        _claim(category="Taxi / Cab / Ride-hailing", amountUSD=90.0), rules
     )
     assert over_auto["requiresManualReview"] is True
     assert "TAXI_REVIEW_REQUIRED" in _rule_ids(over_auto)
 
     over_cap = evaluate_expense_policy(
-        _claim(category="Ground Transport", amountUSD=200.0), rules
+        _claim(category="Taxi / Cab / Ride-hailing", amountUSD=200.0), rules
     )
     assert over_cap["overallPassed"] is False
     assert "TAXI_MAX_EXCEEDED" in _rule_ids(over_cap)
@@ -98,7 +98,7 @@ def test_ground_transport_thresholds(rules):
 
 
 def test_flights_always_require_manual_review(rules):
-    report = evaluate_expense_policy(_claim(category="Flights", amountUSD=520.0), rules)
+    report = evaluate_expense_policy(_claim(category="Air Travel", amountUSD=520.0), rules)
     assert report["requiresManualReview"] is True
     assert report["autoApproveLimit"] == 0.0
     assert "FLIGHT_ALWAYS_MANUAL" in _rule_ids(report)
@@ -115,7 +115,7 @@ def test_flights_always_require_manual_review(rules):
 )
 def test_flight_cabin_class_depends_on_grade(rules, grade, expected_rule):
     report = evaluate_expense_policy(
-        _claim(category="Flights", amountUSD=800.0, employeeGrade=grade), rules
+        _claim(category="Air Travel", amountUSD=800.0, employeeGrade=grade), rules
     )
     assert expected_rule in _rule_ids(report)
 
@@ -126,7 +126,7 @@ def test_flight_cabin_class_depends_on_grade(rules, grade, expected_rule):
 @pytest.mark.parametrize("grade, cap", [("L2", 120.0), ("L3", 120.0), ("L4", 250.0), ("VP", 250.0)])
 def test_lodging_nightly_cap_depends_on_grade(rules, grade, cap):
     report = evaluate_expense_policy(
-        _claim(category="Lodging", amountUSD=cap - 1, employeeGrade=grade), rules
+        _claim(category="Hotel / Lodging", amountUSD=cap - 1, employeeGrade=grade), rules
     )
     assert report["maxLimitAllowed"] == cap
     assert report["overallPassed"] is True
@@ -135,7 +135,7 @@ def test_lodging_nightly_cap_depends_on_grade(rules, grade, cap):
 
 def test_lodging_over_the_grade_cap_fails(rules):
     report = evaluate_expense_policy(
-        _claim(category="Lodging", amountUSD=200.0, employeeGrade="L3"), rules
+        _claim(category="Hotel / Lodging", amountUSD=200.0, employeeGrade="L3"), rules
     )
     assert report["overallPassed"] is False
     assert "LODGING_LIMIT_EXCEEDED" in _rule_ids(report)
@@ -146,7 +146,7 @@ def test_lodging_over_the_grade_cap_fails(rules):
 
 def test_client_entertainment_restricted_to_manager_grades(rules):
     junior = evaluate_expense_policy(
-        _claim(category="Client Entertainment", amountUSD=200.0, employeeGrade="L3",
+        _claim(category="Client / Business Entertainment", amountUSD=200.0, employeeGrade="L3",
                attendees="Alice, Bob (ACME)"),
         rules,
     )
@@ -154,7 +154,7 @@ def test_client_entertainment_restricted_to_manager_grades(rules):
     assert "CLIENT_ENT_GRADE_RESTRICTION" in _rule_ids(junior)
 
     senior = evaluate_expense_policy(
-        _claim(category="Client Entertainment", amountUSD=200.0, employeeGrade="L5",
+        _claim(category="Client / Business Entertainment", amountUSD=200.0, employeeGrade="L5",
                attendees="Alice, Bob (ACME)"),
         rules,
     )
@@ -164,14 +164,14 @@ def test_client_entertainment_restricted_to_manager_grades(rules):
 
 def test_client_entertainment_requires_attendees_and_respects_the_cap(rules):
     missing_attendees = evaluate_expense_policy(
-        _claim(category="Client Entertainment", amountUSD=200.0, employeeGrade="L5",
+        _claim(category="Client / Business Entertainment", amountUSD=200.0, employeeGrade="L5",
                attendees=""),
         rules,
     )
     assert "CLIENT_ENT_MISSING_ATTENDEES" in _rule_ids(missing_attendees)
 
     over_cap = evaluate_expense_policy(
-        _claim(category="Client Entertainment", amountUSD=900.0, employeeGrade="Director",
+        _claim(category="Client / Business Entertainment", amountUSD=900.0, employeeGrade="Director",
                attendees="Alice, Bob (ACME)"),
         rules,
     )
@@ -184,7 +184,7 @@ def test_client_entertainment_requires_attendees_and_respects_the_cap(rules):
 
 def test_missing_receipt_fails_when_one_is_required(rules):
     report = evaluate_expense_policy(
-        _claim(category="Ground Transport", amountUSD=30.0, receiptAttached=False), rules
+        _claim(category="Taxi / Cab / Ride-hailing", amountUSD=30.0, receiptAttached=False), rules
     )
     assert report["overallPassed"] is False
     assert "RECEIPT_REQUIRED_MISSING" in _rule_ids(report)
@@ -202,7 +202,7 @@ def test_claims_older_than_ninety_days_need_director_approval(rules):
 
 def test_unknown_category_falls_back_to_a_review_route(rules):
     report = evaluate_expense_policy(
-        _claim(category="Misc / Other", amountUSD=75.0), rules
+        _claim(category="Miscellaneous / Others", amountUSD=75.0), rules
     )
     assert report["requiresManualReview"] is True
 

@@ -4,6 +4,16 @@ Unchanged rule logic — only its *input* changed in Phase 1: the ruleset now ar
 sourced from the ``policy_rules`` table (``PolicyRuleService.rules_for_engine``) instead of being
 imported from a module-level Python list. Behaviour is intentionally identical; evaluating the new
 declarative ``conditions``/``actions`` payloads is a later phase.
+
+Category names were migrated from the original five (``Meals``, ``Ground Transport``, ``Flights``,
+``Lodging``, ``Client Entertainment``) to the fifteen-category invoice-classification vocabulary in
+migration ``0012_category_custom_fields`` — see :mod:`app.models.category`. The five categories with
+genuinely bespoke rules below (alcohol prohibition, grade-tiered cabin class, grade-tiered nightly
+caps, attendee-listing + grade gate) keep dedicated branches under their new names
+(``Taxi / Cab / Ride-hailing``, ``Air Travel``, ``Hotel / Lodging``,
+``Client / Business Entertainment``); the other ten categories fall through to the generic ``else``
+branch, which already reads ``maxAmountUSD``/``autoApproveLimitUSD``/``receiptRequiredAboveUSD`` off
+the matching ``policy_rules`` row rather than needing a hardcoded branch of their own.
 """
 
 from datetime import datetime, date
@@ -27,7 +37,7 @@ def evaluate_expense_policy(
     rules: Sequence[Dict[str, Any]] = policy_rules or []
     checks: List[Dict[str, Any]] = []
 
-    category = claim.get("category") or "Misc / Other"
+    category = claim.get("category") or "Miscellaneous / Others"
     amount_usd = float(claim.get("amountUSD") or claim.get("amount") or 0.0)
     grade = claim.get("employeeGrade") or "L1"
     has_receipt = bool(claim.get("receiptAttached", False))
@@ -127,7 +137,7 @@ def evaluate_expense_policy(
                 "message": "Receipt contains alcohol. Alcohol is NOT reimbursable under Meals."
             })
 
-    elif category == "Ground Transport":
+    elif category == "Taxi / Cab / Ride-hailing":
         max_limit_allowed = 150.0
         auto_approve_limit = 50.0
         receipt_required = True
@@ -137,8 +147,8 @@ def evaluate_expense_policy(
             requires_manual_review = True
             checks.append({
                 "ruleId": "TAXI_MAX_EXCEEDED",
-                "ruleName": "Ground Transport Max ($150/trip)",
-                "category": "Ground Transport",
+                "ruleName": "Taxi / Cab Max ($150/trip)",
+                "category": "Taxi / Cab / Ride-hailing",
                 "passed": False,
                 "severity": "VIOLATION",
                 "message": f"Amount ${amount_usd:.2f} exceeds $150.00 trip maximum."
@@ -148,14 +158,14 @@ def evaluate_expense_policy(
             requires_manual_review = True
             checks.append({
                 "ruleId": "TAXI_REVIEW_REQUIRED",
-                "ruleName": "Ground Transport Auto-Approve Limit ($50)",
-                "category": "Ground Transport",
+                "ruleName": "Taxi / Cab Auto-Approve Limit ($50)",
+                "category": "Taxi / Cab / Ride-hailing",
                 "passed": True,
                 "severity": "REQUIREMENT",
                 "message": f"Amount ${amount_usd:.2f} exceeds $50.00 auto-approve limit."
             })
 
-    elif category == "Flights":
+    elif category == "Air Travel":
         max_limit_allowed = 10000.0
         auto_approve_limit = 0.0
         receipt_required = True
@@ -163,18 +173,18 @@ def evaluate_expense_policy(
 
         checks.append({
             "ruleId": "FLIGHT_ALWAYS_MANUAL",
-            "ruleName": "Flights Always Manual Review",
-            "category": "Flights",
+            "ruleName": "Air Travel Always Manual Review",
+            "category": "Air Travel",
             "passed": True,
             "severity": "REQUIREMENT",
-            "message": "Flights are NEVER auto-approved. Mandatory Manager review required."
+            "message": "Air travel is NEVER auto-approved. Mandatory Manager review required."
         })
 
         if grade in ["L1", "L2", "L3", "L4"]:
             checks.append({
                 "ruleId": "FLIGHT_CLASS_L1_L4",
                 "ruleName": "Flight Class Policy (Economy)",
-                "category": "Flights",
+                "category": "Air Travel",
                 "passed": True,
                 "severity": "INFO",
                 "message": f"Grade {grade} permitted class: Economy class only."
@@ -183,7 +193,7 @@ def evaluate_expense_policy(
             checks.append({
                 "ruleId": "FLIGHT_CLASS_L5",
                 "ruleName": "Flight Class Policy (Premium Economy > 6hrs)",
-                "category": "Flights",
+                "category": "Air Travel",
                 "passed": True,
                 "severity": "INFO",
                 "message": f"Grade {grade} permitted class: Premium Economy for flights > 6 hours."
@@ -192,13 +202,13 @@ def evaluate_expense_policy(
             checks.append({
                 "ruleId": "FLIGHT_CLASS_VP",
                 "ruleName": "Flight Class Policy (Business Class > 6hrs)",
-                "category": "Flights",
+                "category": "Air Travel",
                 "passed": True,
                 "severity": "INFO",
                 "message": "Grade VP permitted class: Business class for flights > 6 hours."
             })
 
-    elif category == "Lodging":
+    elif category == "Hotel / Lodging":
         auto_approve_limit = 0.0
         requires_manual_review = True
         receipt_required = True
@@ -211,7 +221,7 @@ def evaluate_expense_policy(
             checks.append({
                 "ruleId": "LODGING_LIMIT_EXCEEDED",
                 "ruleName": f"Lodging Nightly Limit (${max_limit_allowed:.0f}/night)",
-                "category": "Lodging",
+                "category": "Hotel / Lodging",
                 "passed": False,
                 "severity": "VIOLATION",
                 "message": f"Amount ${amount_usd:.2f} exceeds Grade {grade} lodging limit of ${max_limit_allowed:.0f}/night."
@@ -220,7 +230,7 @@ def evaluate_expense_policy(
             checks.append({
                 "ruleId": "LODGING_LIMIT_PASS",
                 "ruleName": f"Lodging Nightly Limit (${max_limit_allowed:.0f}/night)",
-                "category": "Lodging",
+                "category": "Hotel / Lodging",
                 "passed": True,
                 "severity": "INFO",
                 "message": f"Amount ${amount_usd:.2f} is compliant with ${max_limit_allowed:.0f}/night ceiling."
@@ -229,13 +239,13 @@ def evaluate_expense_policy(
         checks.append({
             "ruleId": "LODGING_ALWAYS_MANUAL",
             "ruleName": "Lodging Always Manual Review",
-            "category": "Lodging",
+            "category": "Hotel / Lodging",
             "passed": True,
             "severity": "REQUIREMENT",
             "message": "Lodging claims always require manual manager review."
         })
 
-    elif category == "Client Entertainment":
+    elif category == "Client / Business Entertainment":
         max_limit_allowed = 500.0
         auto_approve_limit = 0.0
         requires_manual_review = True
@@ -247,19 +257,19 @@ def evaluate_expense_policy(
             checks.append({
                 "ruleId": "CLIENT_ENT_GRADE_RESTRICTION",
                 "ruleName": "Manager+ Grade Requirement for Client Entertainment",
-                "category": "Client Entertainment",
+                "category": "Client / Business Entertainment",
                 "passed": False,
                 "severity": "VIOLATION",
-                "message": f"Grade {grade} is not authorized for Client Entertainment. Requires Manager+ (L5+) grade."
+                "message": f"Grade {grade} is not authorized for Client / Business Entertainment. Requires Manager+ (L5+) grade."
             })
         else:
             checks.append({
                 "ruleId": "CLIENT_ENT_GRADE_PASS",
                 "ruleName": "Manager+ Grade Authorization",
-                "category": "Client Entertainment",
+                "category": "Client / Business Entertainment",
                 "passed": True,
                 "severity": "INFO",
-                "message": f"Grade {grade} authorized for Client Entertainment."
+                "message": f"Grade {grade} authorized for Client / Business Entertainment."
             })
 
         if amount_usd > 500.0:
@@ -267,7 +277,7 @@ def evaluate_expense_policy(
             checks.append({
                 "ruleId": "CLIENT_ENT_MAX_EXCEEDED",
                 "ruleName": "Event Cap ($500)",
-                "category": "Client Entertainment",
+                "category": "Client / Business Entertainment",
                 "passed": False,
                 "severity": "VIOLATION",
                 "message": f"Amount ${amount_usd:.2f} exceeds $500 per event limit."
@@ -279,7 +289,7 @@ def evaluate_expense_policy(
             checks.append({
                 "ruleId": "CLIENT_ENT_MISSING_ATTENDEES",
                 "ruleName": "Attendee Listing Requirement",
-                "category": "Client Entertainment",
+                "category": "Client / Business Entertainment",
                 "passed": False,
                 "severity": "VIOLATION",
                 "message": "Must list all internal and external attendees and business purpose."

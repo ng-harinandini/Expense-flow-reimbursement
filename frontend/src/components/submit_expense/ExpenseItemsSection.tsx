@@ -14,7 +14,6 @@ interface ExpenseItemsSectionProps {
   onEdit: (item: ExpenseItemDraft) => void;
   onDelete: (item: ExpenseItemDraft) => void;
   onRaiseClaim: () => void;
-  raiseClaimError: string | null;
   isSubmitting: boolean;
 }
 
@@ -24,7 +23,6 @@ export function ExpenseItemsSection({
   onEdit,
   onDelete,
   onRaiseClaim,
-  raiseClaimError,
   isSubmitting,
 }: ExpenseItemsSectionProps) {
   const totalAmount = items.reduce((sum, item) => sum + (item.amount || 0), 0);
@@ -80,9 +78,6 @@ export function ExpenseItemsSection({
           {formatUsd(totalAmount)})
           <ArrowRight />
         </Button>
-        {raiseClaimError && (
-          <p className="text-xs text-destructive">{raiseClaimError}</p>
-        )}
       </div>
     </div>
   );

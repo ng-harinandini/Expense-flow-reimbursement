@@ -1,3 +1,4 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "./client";
 import type { ReceiptExtraction } from "./expenseItems";
 import type { ClaimFormValues } from "@/components/submit_expense/claimSchema";
@@ -83,12 +84,15 @@ export function createClaim(
 // ---------------------------------------------------------------------------
 
 export interface GetClaimsParams {
-  status?: string;
+  /** One status, or several (OR'd) — sent as repeated `?status=` params in a single request. */
+  status?: string | string[];
   employeeId?: string;
   riskLevel?: string;
   limit?: number;
   offset?: number;
 }
+
+export const CLAIMS_QUERY_KEY = ["claims"] as const;
 
 /** Raw shape the backend serialises — `title` maps to the frontend's `claimTitle`. */
 interface ClaimApiShape {
@@ -100,6 +104,7 @@ interface ClaimApiShape {
   fromDate: string | null;
   toDate: string | null;
   status: string;
+  totalAmount: number | null;
   items: Array<{
     id: string;
     category: string | null;
@@ -109,21 +114,25 @@ interface ClaimApiShape {
     amount: number | null;
     currency: string | null;
     fileUrl: string | null;
+    status: string | null;
   }>;
   workflowHistory: WorkflowStepLog[];
+  withdrawnAt: string | null;
+  withdrawalReason: string | null;
   [key: string]: unknown;
 }
 
 function mapClaim(raw: ClaimApiShape): Claim {
   const items: ClaimExpenseItem[] = (raw.items ?? []).map((i) => ({
     id: i.id,
-    category: (i.category ?? "Misc / Other") as ClaimExpenseItem["category"],
+    category: (i.category ?? "Miscellaneous / Others") as ClaimExpenseItem["category"],
     merchantVendor: i.merchantVendor ?? "",
     expenseDate: i.expenseDate ?? "",
     description: i.purposeDescription ?? "",
     amount: i.amount ?? 0,
     currency: i.currency ?? "USD",
     receiptUrl: i.fileUrl ?? "",
+    status: (i.status ?? "Submitted") as ClaimExpenseItem["status"],
   }));
 
   return {
@@ -135,14 +144,56 @@ function mapClaim(raw: ClaimApiShape): Claim {
     fromDate: raw.fromDate ?? "",
     toDate: raw.toDate ?? "",
     status: raw.status as ClaimStatus,
+    // The server maintains this roll-up; summing items is only a fallback for older payloads.
+    totalAmount:
+      raw.totalAmount ?? items.reduce((sum, item) => sum + item.amount, 0),
     items,
     workflowHistory: raw.workflowHistory ?? [],
+    withdrawnAt: raw.withdrawnAt ?? null,
+    withdrawalReason: raw.withdrawalReason ?? null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// POST /claims/{id}/withdraw
+// ---------------------------------------------------------------------------
+
+export interface WithdrawClaimOptions {
+  reason: string;
+  expectedVersion?: number;
+}
+
+/**
+ * Withdraw an entire claim. Employees may only withdraw their own, and only before it is
+ * approved — the backend answers 409 once it is Approved/Disbursed and 403 while it is under
+ * fraud investigation. Resolves to the updated claim.
+ */
+export function withdrawClaim(
+  claimId: string,
+  options: WithdrawClaimOptions = { reason: "Withdrawn by employee" },
+): Promise<Claim> {
+  const body: Record<string, unknown> = {};
+  if (options.reason) body.reason = options.reason;
+  if (options.expectedVersion != null) body.expectedVersion = options.expectedVersion;
+
+  return apiRequest<ClaimApiShape>(`/claims/${encodeURIComponent(claimId)}/withdraw`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+  }).then(mapClaim);
+}
+
+/** Appends one `?status=` param per value — the backend OR's repeated params into one query. */
+function appendStatus(query: URLSearchParams, status: GetClaimsParams["status"]): void {
+  if (!status) return;
+  for (const value of Array.isArray(status) ? status : [status]) {
+    if (value) query.append("status", value);
+  }
 }
 
 export function getClaims(params: GetClaimsParams = {}): Promise<Claim[]> {
   const query = new URLSearchParams();
-  if (params.status) query.set("status", params.status);
+  appendStatus(query, params.status);
   if (params.employeeId) query.set("employeeId", params.employeeId);
   if (params.riskLevel) query.set("riskLevel", params.riskLevel);
   if (params.limit != null) query.set("limit", String(params.limit));
@@ -151,4 +202,110 @@ export function getClaims(params: GetClaimsParams = {}): Promise<Claim[]> {
   const path = query.toString() ? `/claims?${query}` : "/claims";
 
   return apiRequest<ClaimApiShape[]>(path).then((list) => list.map(mapClaim));
+}
+
+export function useClaimsQuery(params: GetClaimsParams = {}) {
+  return useQuery({
+    queryKey: [...CLAIMS_QUERY_KEY, params],
+    queryFn: () => getClaims(params),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// GET /claims/team
+// ---------------------------------------------------------------------------
+
+export const TEAM_CLAIMS_QUERY_KEY = ["claims", "team"] as const;
+
+/**
+ * Claims filed by the caller's direct reports (manager-only). Same query params and response
+ * shape as {@link getClaims} — just scoped server-side to the manager's own team.
+ */
+export function getTeamClaims(params: GetClaimsParams = {}): Promise<Claim[]> {
+  const query = new URLSearchParams();
+  appendStatus(query, params.status);
+  if (params.riskLevel) query.set("riskLevel", params.riskLevel);
+  if (params.limit != null) query.set("limit", String(params.limit));
+  if (params.offset != null) query.set("offset", String(params.offset));
+
+  const path = query.toString() ? `/claims/team?${query}` : "/claims/team";
+
+  return apiRequest<ClaimApiShape[]>(path).then((list) => list.map(mapClaim));
+}
+
+export function useTeamClaimsQuery(params: GetClaimsParams = {}) {
+  return useQuery({
+    queryKey: [...TEAM_CLAIMS_QUERY_KEY, params],
+    queryFn: () => getTeamClaims(params),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// POST /claims/{id}/action
+// ---------------------------------------------------------------------------
+
+// "DISBURSE" was retired — Approve is the final reviewer step (see
+// app.domain.claim_state_machine on the backend, which no longer accepts that action at all).
+export type ClaimReviewAction = "APPROVE" | "REJECT" | "FLAG_FRAUD";
+
+export interface ExecuteClaimActionOptions {
+  claimId: string;
+  action: ClaimReviewAction;
+  notes?: string;
+  expectedVersion?: number;
+}
+
+/**
+ * Apply a reviewer decision. The backend derives the target state from the claim's current
+ * status (e.g. APPROVE escalates Manager_Review -> Finance_Review) and 409s with the legal next
+ * states if the action isn't valid from where the claim currently is.
+ */
+export function executeClaimAction({
+  claimId,
+  action,
+  notes,
+  expectedVersion,
+}: ExecuteClaimActionOptions): Promise<Claim> {
+  const body: Record<string, unknown> = { action };
+  if (notes) body.notes = notes;
+  if (expectedVersion != null) body.expectedVersion = expectedVersion;
+
+  return apiRequest<ClaimApiShape>(`/claims/${encodeURIComponent(claimId)}/action`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+  }).then(mapClaim);
+}
+
+export function useExecuteClaimActionMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: executeClaimAction,
+    onSuccess: () => {
+      // The acted-on claim can appear in both the caller's own list and their team list
+      // (e.g. an admin), so both are invalidated rather than guessing which one is stale.
+      queryClient.invalidateQueries({ queryKey: CLAIMS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: TEAM_CLAIMS_QUERY_KEY });
+    },
+  });
+}
+
+export function useWithdrawClaimMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      claimId,
+      reason,
+      expectedVersion,
+    }: {
+      claimId: string;
+      reason: string;
+      expectedVersion?: number;
+    }) => withdrawClaim(claimId, { reason, expectedVersion }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: CLAIMS_QUERY_KEY });
+    },
+  });
 }

@@ -79,6 +79,11 @@ class EmployeeService:
         """The employee's manager — the default first-step approver."""
         return employee.manager
 
+    def list_direct_reports(self, manager: Employee) -> Sequence[Employee]:
+        """Every employee whose ``manager_id`` points at ``manager`` — one level, not the whole
+        reporting chain beneath them."""
+        return self._employees.list_direct_reports(manager.id)
+
     def provision_for_admin(
         self,
         *,

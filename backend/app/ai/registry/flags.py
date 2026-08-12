@@ -34,6 +34,7 @@ _FLAG_TREE: dict[str, tuple[str, Optional[str]]] = {
     "ai.rerank": ("RERANK_ENABLED", "ai.retrieval"),
     "ai.duplicate_detection": ("DUPLICATE_DETECTION_ENABLED", "ai"),
     "ai.decision_memory": ("DECISION_MEMORY_ENABLED", "ai"),
+    "ai.category_classification": ("CLASSIFICATION_ENABLED", "ai"),
     "ai.llm": ("LLM_ENABLED", "ai"),
     "ai.llm.explanations": ("LLM_EXPLANATIONS_ENABLED", "ai.llm"),
     "ai.telemetry": ("TELEMETRY_ENABLED", "ai"),

@@ -14,6 +14,7 @@ import {
   Tag,
 } from "lucide-react";
 
+import { useCategoriesQuery } from "@/api/categories";
 import { uploadReceipt, type ReceiptExtraction } from "@/api/expenseItems";
 import { getErrorMessage } from "@/lib/apiError";
 
@@ -80,11 +81,26 @@ export function AddExpenseItemDialog({
     handleSubmit,
     reset,
     setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<ExpenseItemFormValues>({
     resolver: yupResolver(expenseItemSchema),
     defaultValues: EXPENSE_ITEM_FORM_DEFAULTS,
   });
+
+  // The server answers with a category *name* from the database, validated against exactly this
+  // set. Rendering the same source is what keeps a suggestion selectable — with the hardcoded list
+  // a category an admin added would arrive with no matching <option>, and the select would go
+  // blank. EXPENSE_CATEGORIES stays as the fallback for when the query hasn't landed or failed.
+  const { data: liveCategories } = useCategoriesQuery();
+  const categoryOptions = React.useMemo(() => {
+    const live = (liveCategories ?? [])
+      // The COMMON row is a bucket of shared extraction fields, not a category anyone can pick.
+      .filter((category) => !category.isCommon && category.isActive)
+      .sort((a, b) => a.displayOrder - b.displayOrder)
+      .map((category) => category.name);
+    return live.length ? live : EXPENSE_CATEGORIES;
+  }, [liveCategories]);
 
   // Reload the form each time the dialog opens so add and edit never leak state.
   React.useEffect(() => {
@@ -120,6 +136,14 @@ export function AddExpenseItemDialog({
 
   const fieldsEnabled = Boolean(receipt) && !isExtracting;
   const isPdf = receipt?.type === "application/pdf";
+
+  // Comparing against the live value rather than tracking "was prefilled" means the badge
+  // disappears the moment the user picks something else, and reappears on an edit-mode reopen if
+  // they kept the suggestion — the reopen path restores both the saved category and `extraction`.
+  const selectedCategory = watch("category");
+  const categoryWasSuggested =
+    Boolean(extraction?.suggestedCategory) &&
+    selectedCategory === extraction?.suggestedCategory;
 
   const handleFileAccepted = async (file: File) => {
     uploadRef.current?.abort();
@@ -181,8 +205,16 @@ export function AddExpenseItemDialog({
         setValue("taxAmount", taxValue, { shouldValidate: true });
       }
     }
-    // No category prefill: the endpoint only echoes back a hint we don't send,
-    // so the user always picks it. See ReceiptExtraction.suggestedCategory.
+    if (result.suggestedCategory) {
+      // Only ever set a value that has a matching <option>. A name with none renders the select
+      // blank while the form value is non-empty — and `category` is only `string().required()`, so
+      // validation would still pass and the user would submit a category they never saw. The
+      // dropdown and the server read the same category list, so a miss here means the list changed
+      // mid-session or the query hasn't landed and we're on the fallback.
+      const suggested = result.suggestedCategory.trim().toLowerCase();
+      const match = categoryOptions.find((option) => option.toLowerCase() === suggested);
+      if (match) setValue("category", match, { shouldValidate: true });
+    }
   };
 
   const handleFileRemoved = () => {
@@ -334,15 +366,25 @@ export function AddExpenseItemDialog({
                       {...register("category")}
                     >
                       <option value="">Select a category</option>
-                      {EXPENSE_CATEGORIES.map((c) => (
+                      {categoryOptions.map((c) => (
                         <option key={c} value={c}>
                           {c}
                         </option>
                       ))}
                     </select>
                   </div>
-                  {errors.category && (
+                  {errors.category ? (
                     <p className="text-xs text-destructive">{errors.category.message}</p>
+                  ) : (
+                    categoryWasSuggested && (
+                      <p className="flex items-center gap-1.5 text-xs text-primary">
+                        <Sparkles className="size-3 shrink-0" />
+                        Read from the receipt
+                        {extraction?.suggestedCategoryConfidence != null &&
+                          ` (${Math.round(extraction.suggestedCategoryConfidence * 100)}% confident)`}
+                        {" — change it if it's wrong."}
+                      </p>
+                    )
                   )}
                 </div>
 

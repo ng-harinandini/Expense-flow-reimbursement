@@ -18,6 +18,7 @@ from decimal import Decimal
 from typing import Any, Optional, Sequence
 
 from app.models.audit import AuditLog
+from app.models.category import ExpenseCategory
 from app.models.claim import Attachment, Claim, ClaimStatusHistory, Comment
 from app.models.expense_item import ExpenseItem
 from app.models.fraud import FraudResult
@@ -148,6 +149,23 @@ def item_to_dict(item: ExpenseItem) -> dict[str, Any]:
             if item.fraud_risk_score is not None
             else None
         ),
+        # ``None`` when classification never actually ran (feature off, or nothing to classify
+        # from) — not merely "no mismatch found". ``ai_document_type`` is set whenever a response
+        # was parsed at all, including the invalid-category case; ``category_review_required``
+        # covers the outright-failure case where nothing else got set.
+        "documentClassification": (
+            {
+                "documentType": item.ai_document_type,
+                "suggestedCategory": item.ai_suggested_category,
+                "confidence": _float(item.ai_classification_confidence),
+                "categoryMismatch": item.category_mismatch,
+                "needsManualReview": item.category_review_required,
+                "extractedFields": item.ai_category_fields,
+                "notes": item.ai_classification_notes,
+            }
+            if item.ai_document_type is not None or item.category_review_required
+            else None
+        ),
         "status": item.status.value,
         "decidedAt": _iso(item.decided_at),
         "decisionNotes": item.decision_notes,
@@ -258,10 +276,12 @@ def claim_to_dict(claim: Claim, *, include_internal_comments: bool = True) -> di
         ),
         "decisionNotes": claim.decision_notes,
         "rejectionReason": claim.rejection_reason,
+        "withdrawalReason": claim.withdrawal_reason,
         "reimbursementReference": claim.reimbursement_reference,
         "approvedAt": _iso(claim.approved_at),
         "rejectedAt": _iso(claim.rejected_at),
         "reimbursedAt": _iso(claim.reimbursed_at),
+        "withdrawnAt": _iso(claim.withdrawn_at),
         "createdAt": _iso(claim.created_at),
         "updatedAt": _iso(claim.updated_at),
         # Clients echo this back on writes to get optimistic-concurrency protection.
@@ -371,9 +391,30 @@ def policy_rule_to_dict(rule: PolicyRule) -> dict[str, Any]:
         "expirationDate": _iso_date(rule.expiration_date),
         "conditions": rule.conditions,
         "actions": rule.actions,
+        # AI extraction provenance — present only for rules that originated from Gemini.
+        "sourceDocumentId": str(rule.source_document_id) if rule.source_document_id else None,
+        "sourcePageNumber": rule.source_page_number,
+        "sourceChunkId": str(rule.source_chunk_id) if rule.source_chunk_id else None,
+        "extractedBy": rule.extracted_by,
     }
 
 
 def policy_rules_to_engine_input(rules: Sequence[PolicyRule]) -> list[dict[str, Any]]:
     """Rules in the shape ``policy_engine.evaluate_expense_policy`` expects."""
     return [policy_rule_to_dict(rule) for rule in rules]
+
+
+# --- categories ----------------------------------------------------------------
+
+def category_to_dict(category: ExpenseCategory) -> dict[str, Any]:
+    """One ``expense_categories`` row as ``ExpenseCategorySchema`` — the ``GET /categories`` shape."""
+    return {
+        "id": str(category.id),
+        "code": category.code,
+        "name": category.name,
+        "description": category.description,
+        "displayOrder": category.display_order,
+        "isActive": category.is_active,
+        "isCommon": category.is_common,
+        "customFields": category.custom_fields or [],
+    }

@@ -78,6 +78,7 @@ class ClaimStatus(_WireEnum):
     REJECTED = "Rejected"
     REIMBURSED = "Disbursed"
     FLAGGED_FRAUD = "Flagged_Fraud"
+    WITHDRAWN = "Withdrawn"
 
 
 # Canonical spec spellings accepted as input (normalized: upper + underscores).
@@ -87,6 +88,7 @@ ClaimStatus._aliases = {  # type: ignore[attr-defined]
     "DISBURSED": ClaimStatus.REIMBURSED.value,
     "REIMBURSED": ClaimStatus.REIMBURSED.value,
     "FLAGGED": ClaimStatus.FLAGGED_FRAUD.value,
+    "CANCELLED": ClaimStatus.WITHDRAWN.value,
 }
 
 
@@ -170,6 +172,7 @@ class AuditAction(_WireEnum):
     CLAIM_CREATE = "CLAIM_CREATE"
     SUBMIT_CLAIM = "SUBMIT_CLAIM"
     CLAIM_UPDATE = "CLAIM_UPDATE"
+    CLAIM_WITHDRAW = "CLAIM_WITHDRAW"
     CLAIM_STATUS_CHANGE = "CLAIM_STATUS_CHANGE"
     EXPENSE_ITEM_DECISION = "EXPENSE_ITEM_DECISION"
     POLICY_EVALUATION = "POLICY_EVALUATION"
@@ -181,6 +184,9 @@ class AuditAction(_WireEnum):
     ATTACHMENT_ADDED = "ATTACHMENT_ADDED"
     RECEIPT_UPLOAD = "RECEIPT_UPLOAD"
     POLICY_UPDATE = "POLICY_UPDATE"
+    CATEGORY_CREATE = "CATEGORY_CREATE"
+    CATEGORY_UPDATE = "CATEGORY_UPDATE"
+    CATEGORY_DELETE = "CATEGORY_DELETE"
     IAM_REFINED = "IAM_REFINED"
     USER_CREATE = "USER_CREATE"
     USER_UPDATE = "USER_UPDATE"
@@ -199,6 +205,7 @@ class AuditEntity(_WireEnum):
     RECEIPT = "Receipt"
     EMPLOYEE = "Employee"
     POLICY_RULE = "PolicyRule"
+    EXPENSE_CATEGORY = "ExpenseCategory"
     APPROVAL_WORKFLOW = "ApprovalWorkflow"
     APPROVAL_STEP = "ApprovalStep"
     FRAUD_RESULT = "FraudResult"

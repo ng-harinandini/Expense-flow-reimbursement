@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # Root log level for the structured JSON logger (app.core.logging).
     LOG_LEVEL: str = "INFO"
 
+    # --- CORS ---
+    #: Comma-separated frontend origins allowed to call this API, e.g.
+    #: "http://localhost:3000,https://app.example.com". Kept as a plain string because
+    #: pydantic-settings would otherwise try to JSON-decode a list-typed field.
+    FE_URL: str = ""
+
     # --- Database (PostgreSQL only) ---
     DATABASE_URL: Optional[str] = None
     DB_USER: Optional[str] = None
@@ -39,11 +45,24 @@ class Settings(BaseSettings):
     DB_HOST: Optional[str] = None
     DB_PORT: int = 5432
     DB_NAME: Optional[str] = None
+    #: search_path pinned on every connection so queries don't need a schema prefix.
+    DB_SCHEMA: Optional[str] = None
 
     # SQLAlchemy engine pool tuning
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
     DB_POOL_RECYCLE_SECONDS: int = 1800
+
+    # --- SSH tunnel (optional) ---
+    # When the database sits in a private VPC, set SSH_TUNNEL_ENABLED=true and point these at a
+    # bastion host; the tunnel's local port is then used instead of DB_HOST/DB_PORT directly.
+    SSH_TUNNEL_ENABLED: bool = False
+    SSH_HOST: Optional[str] = None
+    SSH_PORT: int = 22
+    SSH_USER: str = "ec2-user"
+    #: AWS Secrets Manager secret holding the bastion's PEM private key.
+    SSH_SECRET_NAME: Optional[str] = None
+    SSH_SECRET_REGION: Optional[str] = None
 
     # --- AWS / S3 / Textract ---
     AWS_REGION: str = "us-east-1"
@@ -85,6 +104,19 @@ class Settings(BaseSettings):
     @property
     def database_configured(self) -> bool:
         return self.database_url is not None
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Allowed CORS origins parsed from FE_URL.
+
+        Blank entries and trailing slashes are dropped — the CORS spec matches the Origin header
+        exactly, and browsers never send a trailing slash.
+        """
+        return [
+            origin.strip().rstrip("/")
+            for origin in self.FE_URL.split(",")
+            if origin.strip()
+        ]
 
     @property
     def cognito_region(self) -> str:

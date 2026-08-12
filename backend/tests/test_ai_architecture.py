@@ -227,6 +227,7 @@ def test_business_layers_reach_retrieval_only_via_knowledge_service() -> None:
         "app.ai.retrieval", "app.ai.vector_store", "app.ai.embeddings",
         "app.ai.reranking", "app.ai.chunking", "app.ai.parsing",
         "app.ai.ingestion", "app.ai.memory", "app.ai.duplicate_detection",
+        "app.ai.classification",
     )
     violations: list[str] = []
     for root in (APP_ROOT / "api", APP_ROOT / "services", APP_ROOT / "repositories",

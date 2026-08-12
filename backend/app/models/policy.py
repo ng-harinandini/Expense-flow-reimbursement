@@ -14,6 +14,7 @@ submission date. Rows are never edited in place and never deleted.
 
 from __future__ import annotations
 
+import uuid
 from datetime import date
 from decimal import Decimal
 from typing import Optional
@@ -22,6 +23,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Date,
+    ForeignKey,
     Index,
     Integer,
     Numeric,
@@ -29,7 +31,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -86,8 +88,9 @@ class PolicyRule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     requires_pre_approval: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
-    # Free-text limit for rules money cannot express ("Per signed agreement").
-    limit_expression: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # Free-text limit for rules money cannot express ("Per signed agreement"). Unbounded: a
+    # reference/formula-based limit must be stored verbatim, not truncated.
+    limit_expression: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
     expiration_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -105,6 +108,24 @@ class PolicyRule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     special_rules: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
     created_by_sub: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # --- AI extraction provenance (set when a rule originated from an AI candidate) ---
+    source_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_documents.id", ondelete="SET NULL",
+                   name="fk_policy_rules_source_document"),
+        nullable=True,
+    )
+    source_page_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source_chunk_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_chunks.id", ondelete="SET NULL",
+                   name="fk_policy_rules_source_chunk"),
+        nullable=True,
+    )
+    # Provider/model provenance, e.g. "BEDROCK-<configured-model>" or "GEMINI-2.5-FLASH";
+    # "MANUAL_ENTRY" for human-authored rules.
+    extracted_by: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     def is_effective_on(self, on_date: date) -> bool:
         """Whether this rule governs an expense dated ``on_date``."""

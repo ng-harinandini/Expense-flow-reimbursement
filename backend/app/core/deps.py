@@ -23,13 +23,17 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.ai.classification.service import DocumentClassificationService
+from app.ai.core.config import ai_settings
 from app.ai.duplicate_detection.service import DuplicateDetectionService
+from app.ai.extraction.receipt_extractor import BedrockReceiptExtractor
 from app.ai.governance.feature_flags import PersistedFeatureFlagStore
 from app.ai.knowledge.service import KnowledgeService
 from app.ai.prompts.registry import PromptRegistry
 from app.ai.registry.flags import feature_flags
 from app.ai.services.composition import build_duplicate_detection_service, build_knowledge_service
 from app.core.database import get_db
+from app.core.logging import get_logger
 from app.core.security import TokenError, verify_access_token
 from app.core.unit_of_work import UnitOfWork
 from app.domain.actor import Actor
@@ -38,13 +42,18 @@ from app.repositories.audit_repository import AuditLogRepository
 from app.repositories.claim_repository import ClaimRepository
 from app.repositories.employee_repository import EmployeeRepository
 from app.repositories.fraud_repository import FraudResultRepository
+from app.repositories.category_repository import CategoryRepository
 from app.repositories.policy_rule_repository import PolicyRuleRepository
 from app.repositories.role_repository import RoleRepository
 from app.repositories.workflow_repository import ApprovalWorkflowRepository
 from app.services.audit_service import AuditService
 from app.services.claim_service import ClaimService
 from app.services.employee_service import EmployeeService
+from app.services.category_service import CategoryService
 from app.services.policy_rule_service import PolicyRuleService
+from app.services.receipt_extraction import ReceiptExtractor, TextractReceiptExtractor
+
+logger = get_logger(__name__)
 
 # The only valid application roles (mirrors frontend/src/types.ts UserRole).
 VALID_ROLES = frozenset({"employee", "manager", "finance", "admin", "auditor"})
@@ -168,6 +177,10 @@ def get_policy_rule_repository(db: Session = Depends(get_db)) -> PolicyRuleRepos
     return PolicyRuleRepository(db)
 
 
+def get_category_repository(db: Session = Depends(get_db)) -> CategoryRepository:
+    return CategoryRepository(db)
+
+
 def get_audit_repository(db: Session = Depends(get_db)) -> AuditLogRepository:
     return AuditLogRepository(db)
 
@@ -227,6 +240,53 @@ def get_optional_duplicate_detection(
     return duplicate_detection_service
 
 
+def get_document_classification_service(
+    category_repository: CategoryRepository = Depends(get_category_repository),
+    ai_inference_repository: AIInferenceRepository = Depends(get_ai_inference_repository),
+) -> DocumentClassificationService:
+    return DocumentClassificationService(category_repository, ai_inference_repository)
+
+
+def get_optional_document_classification(
+    service: DocumentClassificationService = Depends(get_document_classification_service),
+) -> Optional[DocumentClassificationService]:
+    """``ClaimService``'s document-classification dependency, or ``None`` when the feature is off.
+
+    Same reasoning as :func:`get_optional_decision_memory`: the flag is decided here, not inside
+    ``ClaimService``, so disabling it leaves the claim pipeline byte-identical to today.
+    """
+    if not feature_flags.is_enabled("ai.category_classification"):
+        return None
+    return service
+
+
+def get_receipt_extractor(
+    category_repository: CategoryRepository = Depends(get_category_repository),
+    ai_inference_repository: AIInferenceRepository = Depends(get_ai_inference_repository),
+) -> ReceiptExtractor:
+    """Which engine reads an uploaded receipt: AWS Textract, or one multimodal Bedrock call.
+
+    A provider switch rather than a feature flag, so it is read from settings here rather than from
+    the flag tree — the same treatment ``AI_RULE_EXTRACTION_PROVIDER`` gets. The default is
+    ``textract``, which leaves an untouched deployment behaving exactly as it did before this
+    dependency existed.
+
+    The choice is made here, in ``deps``, for the same reason the classification flag is: the route
+    depends on the ``ReceiptExtractor`` protocol in ``app.services``, so ``app/api`` never imports
+    ``app.ai``. An unrecognized provider name falls back to Textract with a warning rather than
+    failing the request — a typo in an env var must not take receipt upload down.
+    """
+    provider = (ai_settings.RECEIPT_EXTRACTION_PROVIDER or "").strip().lower()
+    if provider == "bedrock":
+        return BedrockReceiptExtractor(category_repository, ai_inference_repository)
+    if provider not in ("", "textract"):
+        logger.warning(
+            "receipt.unknown_extraction_provider",
+            extra={"provider": provider[:64], "using": "textract"},
+        )
+    return TextractReceiptExtractor()
+
+
 def get_audit_service(
     audit_repository: AuditLogRepository = Depends(get_audit_repository),
 ) -> AuditService:
@@ -263,6 +323,13 @@ def get_policy_rule_service(
     return PolicyRuleService(policy_rule_repository, audit_service)
 
 
+def get_category_service(
+    category_repository: CategoryRepository = Depends(get_category_repository),
+    audit_service: AuditService = Depends(get_audit_service),
+) -> CategoryService:
+    return CategoryService(category_repository, audit_service)
+
+
 def get_claim_service(
     claim_repository: ClaimRepository = Depends(get_claim_repository),
     fraud_repository: FraudResultRepository = Depends(get_fraud_repository),
@@ -274,6 +341,9 @@ def get_claim_service(
     duplicate_detection: Optional[DuplicateDetectionService] = Depends(
         get_optional_duplicate_detection
     ),
+    document_classification: Optional[DocumentClassificationService] = Depends(
+        get_optional_document_classification
+    ),
 ) -> ClaimService:
     return ClaimService(
         claim_repository=claim_repository,
@@ -284,4 +354,5 @@ def get_claim_service(
         audit_service=audit_service,
         decision_memory=decision_memory,
         duplicate_detection=duplicate_detection,
+        document_classification=document_classification,
     )

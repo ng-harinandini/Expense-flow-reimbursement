@@ -150,16 +150,17 @@ export function ReceiptDropzone({
                 <Download />
               </Button>
             )}
-            {!isScanning && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => onFileRemoved()}
-              >
-                Remove
-              </Button>
-            )}
+            {/* Deliberately still available mid-scan: the scan now includes a model call and can
+                run for a while, and onFileRemoved aborts the in-flight upload. Hiding this was the
+                only escape hatch, leaving a reload as the alternative. */}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onFileRemoved()}
+            >
+              {isScanning ? "Cancel" : "Remove"}
+            </Button>
           </div>
         </div>
       </div>

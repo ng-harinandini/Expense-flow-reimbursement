@@ -1,6 +1,6 @@
-"""Receipt document helpers: object URLs, and normalizing extractor output.
+"""Receipt document helpers: object URLs, normalizing extractor output, and choosing an extractor.
 
-Two responsibilities, both consequences of ``expense_items`` storing the receipt inline:
+The first two are consequences of ``expense_items`` storing the receipt inline:
 
 1. **The object URL is the only record of the S3 key.** ``expense_items`` has no
    ``s3_bucket``/``s3_key``/``s3_region`` columns — the bucket and region come from settings and
@@ -20,7 +20,7 @@ import logging
 import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Protocol, runtime_checkable
 from urllib.parse import quote, unquote, urlparse
 
 from app.core.config import settings
@@ -176,6 +176,44 @@ def summarize_extraction(extraction: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def flatten_extraction_for_prompt(extraction: Dict[str, Any]) -> str:
+    """Render ``summary``/``lineItems`` as compact text for an LLM prompt.
+
+    ``extraction`` (``ocr_extracted_json``) also carries ``rawTextract`` — the verbatim
+    ``AnalyzeExpense`` API response — which is large and has no signal value for a model deciding
+    what kind of document this is. Only the already-normalized summary fields and line items are
+    rendered; ``rawTextract`` is never included.
+    """
+    summary = extraction.get("summary") or {}
+    lines: list[str] = []
+
+    for label, key in (
+        ("Vendor", "vendorName"),
+        ("Date", "transactionDate"),
+        ("Total", "totalAmount"),
+        ("Currency", "currency"),
+    ):
+        value = summary.get(key)
+        if value not in (None, ""):
+            lines.append(f"{label}: {value}")
+
+    for field in summary.get("fields") or []:
+        field_type = field.get("fieldType")
+        value = field.get("value")
+        if field_type and value not in (None, ""):
+            lines.append(f"{field_type}: {value}")
+
+    line_items = extraction.get("lineItems") or []
+    if line_items:
+        lines.append("Line items:")
+        for item in line_items:
+            description = item.get("description") or "(no description)"
+            amount = item.get("amount")
+            lines.append(f"- {description}" + (f" — {amount}" if amount not in (None, "") else ""))
+
+    return "\n".join(lines)
+
+
 def resolve_field(
     field: str,
     *,
@@ -196,3 +234,82 @@ def resolve_field(
     if extracted and field in extracted and extracted[field] is not None:
         return extracted[field]
     return None
+
+
+# --- which engine reads the receipt ------------------------------------------
+
+
+def empty_extraction(file_name: str, reason: str) -> Dict[str, Any]:
+    """A well-formed extraction result that simply found nothing.
+
+    The single definition of "the scan produced nothing" — every engine degrades to this rather
+    than raising, and the upload route falls back to it if one ever does raise anyway. Keeping the
+    shape identical to a successful result is what lets the client treat a failed scan as "fill the
+    fields in by hand" instead of a lost upload.
+    """
+    return {
+        "source": "fallback",
+        "rawTextract": {"_fallback": True, "_reason": reason[:1000], "_fileName": file_name},
+        "summary": {
+            "vendorName": None,
+            "transactionDate": None,
+            "totalAmount": None,
+            "currency": None,
+            "fields": [],
+        },
+        "lineItems": [],
+        "error": None,
+    }
+
+
+@runtime_checkable
+class ReceiptExtractor(Protocol):
+    """The extraction engine ``POST /expense-items/upload`` calls, whichever one is configured.
+
+    Every argument and the return value are primitives, so this module — and therefore the route
+    that depends on it — never needs to import anything under ``app.ai``. The concrete Bedrock
+    implementation lives in ``app.ai.extraction.receipt_extractor``; the selection between the two
+    happens in ``app.core.deps.get_receipt_extractor``, the same boundary
+    ``DocumentClassificationRecorder`` keeps for classification.
+
+    Implementations **never raise**: an extractor that cannot read a document returns the same
+    well-formed empty result with ``source="fallback"``, so a scan failure costs the employee a
+    pre-filled form and never the upload itself.
+    """
+
+    def extract(
+        self,
+        *,
+        data: Optional[bytes],
+        mime_type: Optional[str] = None,
+        file_name: str = "receipt",
+        s3_bucket: Optional[str] = None,
+        s3_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        ...
+
+
+class TextractReceiptExtractor:
+    """The original path: AWS Textract ``AnalyzeExpense``, unchanged.
+
+    Textract cannot suggest an expense category, so this engine simply never populates the
+    ``suggestedCategory``/``categoryFields`` keys the Bedrock engine adds — the upload response
+    falls back to echoing ``categoryHint``, exactly as it did before the toggle existed.
+    """
+
+    def extract(
+        self,
+        *,
+        data: Optional[bytes],
+        mime_type: Optional[str] = None,
+        file_name: str = "receipt",
+        s3_bucket: Optional[str] = None,
+        s3_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        # Imported here rather than at module scope: this module is imported by app.ai (for
+        # parse_date), and a top-level boto3-bearing import would drag the AWS SDK in with it.
+        from app.services.textract_service import analyze_receipt_with_textract
+
+        return analyze_receipt_with_textract(
+            data=data, s3_bucket=s3_bucket, s3_key=s3_key, file_name=file_name
+        )

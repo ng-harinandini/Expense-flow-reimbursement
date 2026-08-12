@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import {
   PlusCircle,
   FileText,
+  FolderKanban,
   ShieldCheck,
   ClipboardCheck,
   BadgeCheck,
@@ -60,6 +61,12 @@ const NAV_ITEMS: NavItem[] = [
     label: "Policy guidelines",
     icon: ShieldCheck,
     href: "/policy-guidelines",
+    roles: ["admin"],
+  },
+  {
+    label: "Categories",
+    icon: FolderKanban,
+    href: "/categories",
     roles: ["admin"],
   },
   {

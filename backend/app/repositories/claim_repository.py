@@ -44,14 +44,22 @@ logger = get_logger(__name__)
 # Amounts within this tolerance are "the same amount" for duplicate detection.
 DUPLICATE_AMOUNT_TOLERANCE = Decimal("0.01")
 
+#: Claim states that closed *without* the expense being paid, and therefore do not make a re-filing
+#: of the same expense a duplicate. ``Withdrawn`` belongs here for the same reason ``Rejected``
+#: does — and more strongly: withdrawing is precisely what an employee does *before* re-submitting
+#: a corrected claim, so counting it as a duplicate would block the flow it exists to enable.
+UNPAID_CLOSED_STATUSES = (ClaimStatus.REJECTED, ClaimStatus.WITHDRAWN)
+
 
 @dataclass(frozen=True)
 class ClaimQuery:
     """Filter set for claim listing. All fields optional; ``None`` means "no filter"."""
 
     employee_id: Optional[uuid.UUID] = None
+    employee_ids: Optional[Sequence[uuid.UUID]] = None
     category: Optional[str] = None
     status: Optional[ClaimStatus] = None
+    statuses: Optional[Sequence[ClaimStatus]] = None
     risk_level: Optional[FraudRiskLevel] = None
     assigned_reviewer_id: Optional[uuid.UUID] = None
     expense_date_from: Optional[date] = None
@@ -120,6 +128,8 @@ class ClaimRepository(BaseRepository[Claim]):
 
         if query.employee_id is not None:
             stmt = stmt.where(Claim.employee_id == query.employee_id)
+        if query.employee_ids is not None:
+            stmt = stmt.where(Claim.employee_id.in_(query.employee_ids))
         # The expense filters moved down to the items, so they become "contains an item that…"
         # rather than a property of the claim itself. The public filter names are unchanged.
         if query.category:
@@ -133,6 +143,8 @@ class ClaimRepository(BaseRepository[Claim]):
             )
         if query.status is not None:
             stmt = stmt.where(Claim.status == query.status)
+        if query.statuses is not None:
+            stmt = stmt.where(Claim.status.in_(query.statuses))
         if query.assigned_reviewer_id is not None:
             stmt = stmt.where(Claim.assigned_reviewer_id == query.assigned_reviewer_id)
         if query.expense_date_from is not None:
@@ -221,9 +233,10 @@ class ClaimRepository(BaseRepository[Claim]):
         """Items that look like the same expense filed twice.
 
         Same employee, same vendor (case/whitespace-insensitive), same expense date, and the same
-        amount within :data:`DUPLICATE_AMOUNT_TOLERANCE`. Rejected work is excluded by default —
-        re-filing a corrected version of a rejected expense is legitimate — and that now means
-        **two** filters: the claim as a whole may be rejected, or just this line of it.
+        amount within :data:`DUPLICATE_AMOUNT_TOLERANCE`. Work that closed unpaid
+        (:data:`UNPAID_CLOSED_STATUSES`) is excluded by default — re-filing a corrected version of a
+        rejected or withdrawn expense is legitimate — and that means **two** filters: the claim as a
+        whole may be closed unpaid, or just this line of it may be rejected.
         """
         vendor = (merchant_vendor or "").strip().lower()
         amount = Decimal(amount_usd)
@@ -241,7 +254,7 @@ class ClaimRepository(BaseRepository[Claim]):
         )
         if not include_rejected:
             stmt = stmt.where(
-                Claim.status != ClaimStatus.REJECTED,
+                Claim.status.not_in(UNPAID_CLOSED_STATUSES),
                 ExpenseItem.status != ExpenseItemStatus.REJECTED,
             )
         if exclude_claim_id is not None:
@@ -267,7 +280,7 @@ class ClaimRepository(BaseRepository[Claim]):
                 Claim.employee_id == employee_id,
                 ExpenseItem.expense_date == expense_date,
                 func.lower(func.btrim(ExpenseItem.merchant_vendor)) == vendor,
-                Claim.status != ClaimStatus.REJECTED,
+                Claim.status.not_in(UNPAID_CLOSED_STATUSES),
                 ExpenseItem.status != ExpenseItemStatus.REJECTED,
             )
         )
@@ -495,27 +508,32 @@ class ClaimRepository(BaseRepository[Claim]):
             outcome="WARNING",
         )
 
-    def mark_reimbursed(
+    def withdraw_claim(
         self,
         claim: Claim,
         *,
         actor_role: str,
         actor_sub: Optional[str] = None,
         actor_name: Optional[str] = None,
-        reference: Optional[str] = None,
-        notes: Optional[str] = None,
+        reason: Optional[str] = None,
     ) -> Claim:
-        """Record disbursement (``-> Disbursed``/Reimbursed, terminal)."""
-        claim.reimbursement_reference = reference or claim.reimbursement_reference
+        """Record the owner withdrawing the claim (``-> Withdrawn``, terminal).
+
+        ``withdrawal_reason`` is kept distinct from ``rejection_reason``: nothing was rejected, and
+        conflating the two would make a withdrawn claim read as a reviewer's decision in the audit
+        trail and in every report that groups by reason.
+        """
+        claim.withdrawal_reason = reason or claim.withdrawal_reason
         return self.transition_status(
             claim,
-            ClaimStatus.REIMBURSED,
+            ClaimStatus.WITHDRAWN,
             actor_role=actor_role,
             actor_sub=actor_sub,
             actor_name=actor_name,
-            step_name="Reimbursement",
-            action=f"Reimbursed claim {claim.claim_number}",
-            notes=notes,
+            step_name="Withdrawal",
+            action=f"Withdrew claim {claim.claim_number}",
+            notes=reason,
+            outcome="WARNING",
         )
 
     def flag_fraud(
@@ -593,6 +611,21 @@ class ClaimRepository(BaseRepository[Claim]):
             select(ExpenseItem)
             .options(joinedload(ExpenseItem.claim))
             .where(ExpenseItem.id == item_id)
+        )
+
+    def find_item_by_file_url(self, file_url: str) -> Optional[ExpenseItem]:
+        """The item whose receipt lives at ``file_url``.
+
+        Backs the receipt download's authorization: the requested object must correspond to a
+        persisted item, so the claim behind it can be access-checked. The same document can be
+        attached to more than one item (a legitimately re-used receipt, or a duplicate under
+        investigation) — any match is enough, since the caller re-checks claim access anyway.
+        """
+        return self._one_or_none(
+            select(ExpenseItem)
+            .options(joinedload(ExpenseItem.claim))
+            .where(ExpenseItem.file_url == file_url)
+            .order_by(ExpenseItem.created_at.asc())
         )
 
     def refresh_totals(self, claim: Claim) -> Claim:

@@ -1,15 +1,18 @@
 import {
   BedDouble,
+  Briefcase,
   Car,
+  Fuel,
   GraduationCap,
-  HeartPulse,
   Laptop,
   MoreHorizontal,
+  ParkingCircle,
   PartyPopper,
+  Phone,
   Plane,
-  Users,
+  Send,
+  TrainFront,
   Utensils,
-  Wifi,
   type LucideIcon,
 } from "lucide-react";
 
@@ -34,48 +37,60 @@ export const ACCEPTED_TYPES = {
 export const MAX_SIZE_BYTES = 10 * 1024 * 1024;
 
 export const EXPENSE_CATEGORIES = [
+  "Air Travel",
+  "Train Travel",
+  "Taxi / Cab / Ride-hailing",
+  "Rental Car",
+  "Fuel / Mileage",
+  "Hotel / Lodging",
   "Meals",
-  "Ground Transport",
-  "Flights",
-  "Lodging",
-  "Client Entertainment",
-  "Communications & Connectivity",
-  "Training & Professional Dev",
-  "Software & Subscriptions",
-  "Team Events",
-  "Health & Wellness",
-  "Misc / Other",
+  "Client / Business Entertainment",
+  "Parking & Tolls",
+  "Communication",
+  "Training / Certification / Conference",
+  "Office Supplies / Equipment",
+  "Software / Subscriptions",
+  "Courier / Postage",
+  "Miscellaneous / Others",
 ];
 
 export const MAX_EXPENSE_ITEMS = 10;
 
 export const CATEGORY_ICONS: Record<string, LucideIcon> = {
+  "Air Travel": Plane,
+  "Train Travel": TrainFront,
+  "Taxi / Cab / Ride-hailing": Car,
+  "Rental Car": Car,
+  "Fuel / Mileage": Fuel,
+  "Hotel / Lodging": BedDouble,
   Meals: Utensils,
-  "Ground Transport": Car,
-  Flights: Plane,
-  Lodging: BedDouble,
-  "Client Entertainment": PartyPopper,
-  "Communications & Connectivity": Wifi,
-  "Training & Professional Dev": GraduationCap,
-  "Software & Subscriptions": Laptop,
-  "Team Events": Users,
-  "Health & Wellness": HeartPulse,
-  "Misc / Other": MoreHorizontal,
+  "Client / Business Entertainment": PartyPopper,
+  "Parking & Tolls": ParkingCircle,
+  Communication: Phone,
+  "Training / Certification / Conference": GraduationCap,
+  "Office Supplies / Equipment": Briefcase,
+  "Software / Subscriptions": Laptop,
+  "Courier / Postage": Send,
+  "Miscellaneous / Others": MoreHorizontal,
 };
 
 /** Pill background + text color per category, used for the category badge in the items table. */
 export const CATEGORY_PILL_COLORS: Record<string, string> = {
+  "Air Travel": "bg-blue-500/15 text-blue-600",
+  "Train Travel": "bg-sky-500/15 text-sky-600",
+  "Taxi / Cab / Ride-hailing": "bg-emerald-500/15 text-emerald-600",
+  "Rental Car": "bg-lime-500/15 text-lime-600",
+  "Fuel / Mileage": "bg-orange-500/15 text-orange-600",
+  "Hotel / Lodging": "bg-violet-500/15 text-violet-600",
   Meals: "bg-amber-500/15 text-amber-600",
-  "Ground Transport": "bg-emerald-500/15 text-emerald-600",
-  Flights: "bg-blue-500/15 text-blue-600",
-  Lodging: "bg-violet-500/15 text-violet-600",
-  "Client Entertainment": "bg-pink-500/15 text-pink-600",
-  "Communications & Connectivity": "bg-indigo-500/15 text-indigo-600",
-  "Training & Professional Dev": "bg-teal-500/15 text-teal-600",
-  "Software & Subscriptions": "bg-fuchsia-500/15 text-fuchsia-600",
-  "Team Events": "bg-rose-500/15 text-rose-600",
-  "Health & Wellness": "bg-cyan-500/15 text-cyan-600",
-  "Misc / Other": "bg-muted text-muted-foreground",
+  "Client / Business Entertainment": "bg-pink-500/15 text-pink-600",
+  "Parking & Tolls": "bg-slate-500/15 text-slate-600",
+  Communication: "bg-indigo-500/15 text-indigo-600",
+  "Training / Certification / Conference": "bg-teal-500/15 text-teal-600",
+  "Office Supplies / Equipment": "bg-yellow-500/15 text-yellow-700",
+  "Software / Subscriptions": "bg-fuchsia-500/15 text-fuchsia-600",
+  "Courier / Postage": "bg-cyan-500/15 text-cyan-600",
+  "Miscellaneous / Others": "bg-muted text-muted-foreground",
 };
 
 /** A confirmed expense line item, ready to be grouped under the claim. */
@@ -111,4 +126,13 @@ export function formatUsd(amount: number) {
     style: "currency",
     currency: "USD",
   }).format(amount);
+}
+
+/** `YYYY-MM-DD` (the date input's value format) as `dd/mm/yyyy`.
+*/
+export function formatDdMmYyyy(isoDate: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+  if (!match) return isoDate;
+  const [, year, month, day] = match;
+  return `${day}/${month}/${year}`;
 }

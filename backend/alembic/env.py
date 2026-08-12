@@ -20,8 +20,7 @@ from sqlalchemy import engine_from_config, pool
 # Make the backend package importable (alembic may run from the backend dir).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.config import settings  # noqa: E402
-from app.core.database import Base  # noqa: E402
+from app.core.database import Base, get_connect_args, get_database_url  # noqa: E402
 import app.models  # noqa: E402,F401  (registers all models on Base.metadata)
 import app.ai.models  # noqa: E402,F401  (registers the AI platform tables too)
 
@@ -34,13 +33,9 @@ target_metadata = Base.metadata
 
 
 def _require_url() -> str:
-    url = settings.database_url
-    if not url:
-        raise RuntimeError(
-            "No database configured. Set DATABASE_URL (or DB_USER/DB_HOST/DB_NAME "
-            "and DB_PASSWORD) before running Alembic."
-        )
-    return url
+    # Opens the SSH tunnel first (if SSH_TUNNEL_ENABLED) so Alembic reaches the database the
+    # same way the app does — see app.core.database.get_database_url.
+    return get_database_url()
 
 
 def run_migrations_offline() -> None:
@@ -65,6 +60,7 @@ def run_migrations_online() -> None:
         section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=get_connect_args(),
     )
 
     with connectable.connect() as connection:

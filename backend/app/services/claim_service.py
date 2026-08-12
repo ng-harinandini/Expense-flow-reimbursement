@@ -6,7 +6,8 @@ routes touches the ORM, which is the layering Phase 1 introduces:
     route  ->  service  ->  repository  ->  database
 
 The submission pipeline reproduces the behaviour the in-memory implementation had (policy
-evaluation, then fraud screening, then routing), with two differences that matter:
+evaluation, then fraud screening, then routing), with one advisory pre-policy addition for document
+classification and two persistence differences that matter:
 
 * every step is a *guarded* lifecycle transition, so the claim's own history is a complete and
   gap-free record of how it reached its current state, and
@@ -22,7 +23,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Optional, Protocol, Sequence, Union, runtime_checkable
 
 from app.ai.core.enums import DecisionMemoryKind
 from app.core.logging import get_logger
@@ -41,7 +42,6 @@ from app.models.category import ExpenseCategory
 from app.models.claim import Claim
 from app.models.enums import (
     ApprovalStepStatus,
-    AttachmentKind,
     AuditAction,
     AuditEntity,
     ClaimStatus,
@@ -60,6 +60,7 @@ from app.services.fraud_engine import screen_for_anomalies
 from app.services.mappers import item_to_engine_input, items_to_engine_corpus
 from app.services.policy_engine import evaluate_expense_policy
 from app.services.policy_rule_service import PolicyRuleService
+from app.services.s3_service import S3DownloadError, download_receipt_from_s3
 
 logger = get_logger(__name__)
 
@@ -67,13 +68,9 @@ logger = get_logger(__name__)
 FRAUD_ROUTING_THRESHOLD = 40
 
 #: Categories whose claims require an attendee listing.
-ATTENDEE_REQUIRED_CATEGORIES = frozenset({"Client Entertainment"})
+ATTENDEE_REQUIRED_CATEGORIES = frozenset({"Client / Business Entertainment"})
 
-#: The four actions the existing API exposes on ``POST /claims/{id}/action``.
-CLAIM_ACTIONS = frozenset({"APPROVE", "REJECT", "DISBURSE", "FLAG_FRAUD"})
-
-#: Only these roles may move money.
-DISBURSE_ROLES = frozenset({"finance", "admin"})
+CLAIM_ACTIONS = frozenset({"APPROVE", "REJECT", "FLAG_FRAUD"})
 
 #: How many peer claims to compare against during fraud screening.
 FRAUD_CORPUS_LIMIT = 200
@@ -135,6 +132,35 @@ class DuplicateDetectionRecorder(Protocol):
         ...
 
 
+@runtime_checkable
+class DocumentClassificationRecorder(Protocol):
+    """The one AI-platform capability ``ClaimService`` depends on for document classification:
+    classifying one item's receipt against the closed category list and, when it matches the
+    employee's own selection with enough confidence, extracting that category's fields.
+    Deliberately narrower than the full ``DocumentClassificationService`` — every argument is a
+    primitive or a stdlib type, so this Protocol (and this module) never needs to import anything
+    under ``app.ai`` beyond ``app.ai.core.enums``, the same boundary ``DuplicateDetectionRecorder``
+    keeps above. See ``app.ai.classification.service.DocumentClassificationService.
+    classify_and_extract``, which satisfies this shape. The return value is a plain dict — this
+    service never writes to an ``ExpenseItem`` column; ``ClaimService`` does that itself.
+    """
+
+    def classify_and_extract(
+        self,
+        *,
+        ocr_text: Optional[str],
+        ocr_is_fallback: bool,
+        has_receipt: bool,
+        image_bytes: Optional[bytes],
+        image_mime_type: Optional[str],
+        employee_category: str,
+        claim_id: Optional[uuid.UUID],
+        expense_item_id: Optional[uuid.UUID],
+        actor_sub: Optional[str],
+    ) -> dict[str, Any]:
+        ...
+
+
 class ClaimService:
     """Business operations on claims. One instance per request (see ``app.core.deps``)."""
 
@@ -149,6 +175,7 @@ class ClaimService:
         audit_service: AuditService,
         decision_memory: Optional[DecisionMemoryRecorder] = None,
         duplicate_detection: Optional[DuplicateDetectionRecorder] = None,
+        document_classification: Optional[DocumentClassificationRecorder] = None,
     ) -> None:
         self._claims = claim_repository
         self._fraud = fraud_repository
@@ -161,6 +188,7 @@ class ClaimService:
         # silently disabled here that was not disabled already by whoever chose not to wire one in.
         self._decision_memory = decision_memory
         self._duplicate_detection = duplicate_detection
+        self._document_classification = document_classification
 
     def _remember(
         self, kind: DecisionMemoryKind, subject_id: object, summary: str, *, actor: Actor
@@ -222,7 +250,7 @@ class ClaimService:
         *,
         actor: Actor,
         category: Optional[str] = None,
-        status: Optional[str] = None,
+        status: Union[str, Sequence[str], None] = None,
         employee_code: Optional[str] = None,
         risk_level: Optional[str] = None,
         limit: Optional[int] = None,
@@ -233,6 +261,10 @@ class ClaimService:
         An employee is always scoped to their own claims regardless of the filters they send; a
         non-existent ``employee_code`` filter yields an empty list rather than an error, so a
         dashboard filter cannot 404.
+
+        ``status`` accepts either one value or several (OR'd) — a caller that needs claims across
+        multiple statuses (e.g. finance's Finance_Review + Disbursed + Rejected view) makes one
+        request instead of one per status.
         """
         query_employee_id: Optional[uuid.UUID] = None
 
@@ -250,6 +282,43 @@ class ClaimService:
         return self._claims.search(
             ClaimQuery(
                 employee_id=query_employee_id,
+                category=category or None,
+                statuses=self._coerce_statuses(status),
+                risk_level=self._coerce_risk_level(risk_level),
+                limit=limit,
+                offset=offset,
+            )
+        )
+
+    def list_claims_for_manager(
+        self,
+        *,
+        actor: Actor,
+        category: Optional[str] = None,
+        status: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> Sequence[Claim]:
+        """Claims filed by ``actor``'s direct reports — the manager's own team, not the whole
+        review queue (which may hold claims from anyone, assigned or unassigned).
+
+        Same filter set and the same response shape as :meth:`list_claims`, just scoped by
+        reporting line instead of by a single ``employee_id``. An actor with no employee record,
+        or with no direct reports, gets an empty list rather than an error — an empty team is not
+        a failure.
+        """
+        manager = self._employees.find_actor_employee(actor)
+        if manager is None:
+            return []
+
+        reports = self._employees.list_direct_reports(manager)
+        if not reports:
+            return []
+
+        return self._claims.search(
+            ClaimQuery(
+                employee_ids=[report.id for report in reports],
                 category=category or None,
                 status=self._coerce_status(status),
                 risk_level=self._coerce_risk_level(risk_level),
@@ -284,8 +353,13 @@ class ClaimService:
 
         Mirrors ``POST /claims``, which has always been a create-and-submit call. All of it runs in
         the caller's single transaction.
+
+        The employee must have an active reporting manager: the manager is the first approval step
+        (see :meth:`_start_workflow`), so without one the claim has no approver. That precondition
+        is checked before anything is written, so a rejected submission leaves no draft behind.
         """
         employee = self._employees.resolve_actor_employee(actor)
+        validators.require_reporting_manager(employee)
         actor = actor.with_name(employee.full_name)
 
         claim = self._build_draft(payload, employee=employee, actor=actor)
@@ -330,7 +404,7 @@ class ClaimService:
             f"Routed to {claim.status.value}.",
             actor=actor,
         )
-        self._scan_duplicates(claim)
+        # self._scan_duplicates(claim)
         # History, comments, fraud result and workflow were inserted during this transaction;
         # expire so the serialized aggregate reflects all of them.
         return self._claims.refresh(claim)
@@ -466,7 +540,7 @@ class ClaimService:
             self._coerce_date(resolve("expenseDate", extracted_key="transactionDate"))
             or date.today()
         )
-        category = (payload.get("category") or "Misc / Other").strip()
+        category = (payload.get("category") or "Miscellaneous / Others").strip()
         attendees = validators.validate_attendees(
             payload.get("attendees"), required=category in ATTENDEE_REQUIRED_CATEGORIES
         )
@@ -564,10 +638,11 @@ class ClaimService:
         policy_reports: list[dict[str, Any]] = []
         fraud_reports: list[dict[str, Any]] = []
         for item in claim.items:
+            classification_report = self._classify_item_category(item, claim=claim, actor=actor)
             engine_input = item_to_engine_input(item, claim=claim)
             policy_report = self._evaluate_item_policy(item, claim=claim, rules=rules)
             fraud_report = self._screen_item_fraud(item, claim=claim, corpus=corpus)
-            item.status = self._route_item(policy_report, fraud_report)
+            item.status = self._route_item(policy_report, fraud_report, classification_report)
             policy_reports.append(policy_report)
             fraud_reports.append(fraud_report)
             corpus.append(engine_input)
@@ -651,6 +726,133 @@ class ClaimService:
         )
         return report
 
+    def _classify_item_category(
+        self, item: ExpenseItem, *, claim: Claim, actor: Actor
+    ) -> Optional[dict[str, Any]]:
+        """Classify one item's receipt against the closed category list, when the capability is on.
+
+        Returns ``None`` when the capability is disabled, or the outcome was a silent no-op
+        (nothing to classify from and no receipt was ever claimed) — ``_route_item`` treats
+        ``None`` the same as "nothing to flag". Assigns the AI's verdict onto ``item`` itself,
+        mirroring how ``_evaluate_item_policy``/``_screen_item_fraud`` write their engines'
+        reports. ``item.category`` — the employee's own selection — is never written here.
+        """
+        if self._document_classification is None:
+            return None
+
+        extracted = item.ocr_extracted_json if isinstance(item.ocr_extracted_json, dict) else None
+        ocr_text = receipt_extraction.flatten_extraction_for_prompt(extracted) if extracted else None
+        has_receipt = bool(item.file_url) or extracted is not None
+        if not has_receipt:
+            return None
+
+        log_context = {
+            "claimId": str(claim.id),
+            "claimNumber": claim.claim_number,
+            "itemId": str(item.id),
+            "lineNumber": item.line_number,
+            "employeeCategory": item.category,
+            "hasOcrText": ocr_text is not None,
+            "hasFileUrl": bool(item.file_url),
+            "mimeType": item.mime_type,
+        }
+        logger.info("claim.classification.started", extra=log_context)
+
+        image_bytes: Optional[bytes] = None
+        image_mime_type: Optional[str] = None
+        key = receipt_extraction.parse_object_key(item.file_url) if item.file_url else None
+        if key:
+            try:
+                image_bytes, image_mime_type = download_receipt_from_s3(key)
+                # S3 only echoes a ContentType if one was stored; fall back to the upload's own
+                # declared type, mirroring the receipt-viewer path in app/api/expense_items.py.
+                # Either way it is a hint only — the classification layer sniffs the real type from
+                # the bytes before deciding whether it can be sent as an image.
+                image_mime_type = image_mime_type or item.mime_type
+            except S3DownloadError as exc:
+                # Advisory-only capability: a storage hiccup here must not block claim submission,
+                # unlike the receipt-viewer download path, which has no fallback to degrade to.
+                logger.warning(
+                    "claim.classification.receipt_fetch_failed",
+                    extra={"itemId": str(item.id), "error": str(exc)[:200]},
+                )
+
+        try:
+            report = self._document_classification.classify_and_extract(
+                ocr_text=ocr_text,
+                ocr_is_fallback=item.ocr_source == "fallback",
+                has_receipt=has_receipt,
+                image_bytes=image_bytes,
+                image_mime_type=image_mime_type,
+                employee_category=item.category,
+                claim_id=claim.id,
+                expense_item_id=item.id,
+                actor_sub=actor.sub,
+            )
+        except Exception as exc:
+            logger.exception(
+                "claim.classification.failed",
+                extra={**log_context, "error": str(exc)[:300]},
+            )
+            report = {
+                "documentType": None,
+                "suggestedCategory": None,
+                "confidence": None,
+                "categoryMismatch": False,
+                "categoryReviewRequired": True,
+                "extractedFields": None,
+                "notes": f"Document classification failed: {exc}"[:1000],
+            }
+
+        item.ai_document_type = report.get("documentType")
+        item.ai_suggested_category = report.get("suggestedCategory")
+        confidence = report.get("confidence")
+        item.ai_classification_confidence = (
+            Decimal(str(confidence)) if confidence is not None else None
+        )
+        item.category_mismatch = bool(report.get("categoryMismatch"))
+        item.category_review_required = bool(report.get("categoryReviewRequired"))
+        item.ai_category_fields = report.get("extractedFields")
+        item.ai_classification_notes = report.get("notes")
+
+        classification_log = {
+            **log_context,
+            "documentType": item.ai_document_type,
+            "suggestedCategory": item.ai_suggested_category,
+            "confidence": str(item.ai_classification_confidence)
+            if item.ai_classification_confidence is not None
+            else None,
+            "categoryMismatch": item.category_mismatch,
+            "categoryReviewRequired": item.category_review_required,
+            "notes": item.ai_classification_notes,
+        }
+        if item.ai_document_type is None and item.category_review_required:
+            logger.warning("claim.classification.failed", extra=classification_log)
+        else:
+            logger.info("claim.classification.succeeded", extra=classification_log)
+
+        if item.ai_document_type is None and not item.category_review_required:
+            return None  # silent no-op: nothing worth recording in the claim's history
+
+        if item.category_review_required:
+            action = "Flagged for manual review: " + (
+                report.get("notes") or "category mismatch or insufficient confidence"
+            )
+        else:
+            pct = f"{confidence * 100:.0f}%" if confidence is not None else "unknown"
+            action = f"AI classification matched employee category '{item.category}' (confidence {pct})"
+
+        self._claims.record_step(
+            claim,
+            actor_name="ExpenseFlow Document Classifier",
+            actor_role="admin",
+            step_name=f"Category Classification (item {item.line_number})",
+            action=action,
+            notes=report.get("notes"),
+            outcome="FAILED" if item.category_review_required else "SUCCESS",
+        )
+        return report
+
     def _record_claim_fraud_result(
         self, claim: Claim, reports: list[dict[str, Any]]
     ) -> None:
@@ -682,14 +884,24 @@ class ClaimService:
 
     @staticmethod
     def _route_item(
-        policy_report: dict[str, Any], fraud_report: dict[str, Any]
+        policy_report: dict[str, Any],
+        fraud_report: dict[str, Any],
+        classification_report: Optional[dict[str, Any]] = None,
     ) -> ExpenseItemStatus:
-        """Destination for one evaluated item. Thresholds unchanged from the claim-level routing."""
+        """Destination for one evaluated item. Thresholds unchanged from the claim-level routing.
+
+        ``classification_report`` only ever pushes an otherwise-clean item to ``POLICY_HOLD`` — the
+        same "ask a human" status a policy violation already uses. This is the one place the new
+        document-classification capability affects routing; the policy/fraud engines themselves
+        (``evaluate_expense_policy``/``screen_for_anomalies``) are unchanged.
+        """
         if fraud_report["isFlagged"] and fraud_report["riskScore"] >= FRAUD_ROUTING_THRESHOLD:
             return ExpenseItemStatus.FRAUD_FLAG
         if not policy_report.get("overallPassed"):
             return ExpenseItemStatus.POLICY_HOLD
         if policy_report.get("requiresManualReview"):
+            return ExpenseItemStatus.POLICY_HOLD
+        if classification_report and classification_report.get("categoryReviewRequired"):
             return ExpenseItemStatus.POLICY_HOLD
         return ExpenseItemStatus.AUTO_APPROVED
 
@@ -777,11 +989,12 @@ class ClaimService:
         notes: Optional[str] = None,
         expected_version: Optional[int] = None,
     ) -> Claim:
-        """Apply a reviewer decision (``APPROVE`` / ``REJECT`` / ``DISBURSE`` / ``FLAG_FRAUD``).
+        """Apply a reviewer decision (``APPROVE`` / ``REJECT`` / ``FLAG_FRAUD``).
 
         The claim's current state decides the target: approving a claim in manager review escalates
-        it to finance review, exactly as before. An action that is not legal from the current state
-        raises ``409`` naming the states that are.
+        it to finance review; approving anywhere else (finance review, auto-approved, or a cleared
+        fraud flag) is the final reviewer step — there is no separate disbursement action. An
+        action that is not legal from the current state raises ``409`` naming the states that are.
         """
         normalized = (action or "").strip().upper()
         if normalized not in CLAIM_ACTIONS:
@@ -800,12 +1013,6 @@ class ClaimService:
 
         validators.require_not_terminal(claim)
 
-        if normalized == "DISBURSE" and actor.role not in DISBURSE_ROLES:
-            raise ForbiddenError(
-                "Only finance or admin can disburse.",
-                details={"permittedRoles": sorted(DISBURSE_ROLES)},
-            )
-
         before_status = claim.status
         workflow = self._workflows.get_active_for_claim(claim.id)
 
@@ -820,18 +1027,6 @@ class ClaimService:
                 self._workflows.reject_open_step(
                     workflow, required_role=actor.role, decided_by_sub=actor.sub, reason=notes
                 )
-        elif normalized == "DISBURSE":
-            claim = self._claims.mark_reimbursed(
-                claim, actor_role=actor.role, actor_sub=actor.sub,
-                actor_name=actor.name, notes=notes,
-            )
-            if workflow is not None:
-                self._workflows.complete_step(
-                    workflow, required_role="finance",
-                    status=ApprovalStepStatus.APPROVED, decided_by_sub=actor.sub,
-                    decision_notes=notes,
-                )
-                self._workflows.cancel_open_steps(workflow, decided_by_sub=actor.sub)
         else:  # FLAG_FRAUD
             claim = self._claims.flag_fraud(
                 claim, actor_role=actor.role, actor_sub=actor.sub,
@@ -917,6 +1112,10 @@ class ClaimService:
                 decided_by_sub=actor.sub,
                 decision_notes=notes,
             )
+            # Approve is now the final reviewer action reaching this branch (finance approving
+            # from Finance_Review, or a direct approval of an Auto_Approved/cleared-fraud claim) —
+            # there is no later DISBURSE call to close the workflow out, so this has to do it.
+            self._workflows.advance_or_complete(workflow)
         return self._claims.approve_claim(
             claim, actor_role=actor.role, actor_sub=actor.sub,
             actor_name=actor.name, notes=notes,
@@ -962,6 +1161,104 @@ class ClaimService:
             f"{actor.name} ({actor.role}).",
             actor=actor,
         )
+
+    # --- withdrawal ----------------------------------------------------------
+
+    def withdraw_claim(
+        self,
+        identifier: str,
+        *,
+        actor: Actor,
+        reason: Optional[str] = None,
+        expected_version: Optional[int] = None,
+    ) -> Claim:
+        """Withdraw an entire claim on its owner's behalf (``-> Withdrawn``, terminal).
+
+        Withdrawal is the employee's counterpart to a reviewer's rejection: it closes the claim and
+        every open approval step in one transaction, but records *no* decision — nothing was judged.
+        The whole claim goes at once; there is no per-item withdrawal, because a partially withdrawn
+        report has no meaning to the approver looking at it.
+
+        Ownership is enforced through :meth:`get_claim_for_actor`, so an employee withdrawing
+        somebody else's claim gets 404 rather than a hint that it exists. Which states allow it is
+        :func:`validators.require_withdrawable` — notably not ``Flagged_Fraud``.
+        """
+        claim = self.get_claim_for_actor(identifier, actor=actor)
+
+        # An employee may only ever withdraw their own; the ownership check above already
+        # guarantees it, but admins resolve any claim, so re-assert explicitly for them.
+        if actor.role == "employee":
+            employee = self._employees.resolve_actor_employee(actor)
+            validators.require_claim_ownership(claim, employee)
+
+        # Client-supplied version turns a lost race (a manager approving while the employee
+        # withdraws) into 409 instead of one silently overwriting the other.
+        if expected_version is not None and claim.version != expected_version:
+            raise ConcurrentUpdateError("Claim", claim.claim_number)
+
+        validators.require_withdrawable(claim)
+
+        before_status = claim.status
+        note = (reason or "").strip() or None
+
+        workflow = self._workflows.get_active_for_claim(claim.id)
+        claim = self._claims.withdraw_claim(
+            claim,
+            actor_role=actor.role,
+            actor_sub=actor.sub,
+            actor_name=actor.name,
+            reason=note,
+        )
+        if workflow is not None:
+            self._workflows.cancel_open_steps(
+                workflow,
+                decided_by_sub=actor.sub,
+                reason=note or "Claim withdrawn by the employee.",
+            )
+
+        self._claims.add_comment(
+            claim,
+            body=(
+                f"Claim withdrawn by {actor.name}."
+                if note is None
+                else f"Claim withdrawn by {actor.name}: {note}"
+            ),
+            author_name=actor.name,
+            author_role=actor.role,
+            author_sub=actor.sub,
+        )
+
+        self._audit.record(
+            actor=actor,
+            action=AuditAction.CLAIM_WITHDRAW,
+            entity_type=AuditEntity.CLAIM,
+            entity_id=claim.claim_number,
+            details=(
+                f"Withdrew claim {claim.claim_number} from {before_status.value}"
+                + (f": {note}" if note else ".")
+            ),
+            before={"status": before_status.value},
+            after={"status": claim.status.value, "claimId": str(claim.id)},
+        )
+        # Deliberately excludes `reason`, consistent with the approval/rejection hook above:
+        # decision memory has no role-based visibility filtering yet, and an employee's free-text
+        # withdrawal reason is not something to make broadly retrievable.
+        self._remember(
+            DecisionMemoryKind.CLAIM, claim.id,
+            f"Claim {claim.claim_number} ({claim.currency} {claim.total_amount_usd:.2f} across "
+            f"{claim.item_count} item(s)) withdrawn by {actor.name} ({actor.role}) from "
+            f"{before_status.value}.",
+            actor=actor,
+        )
+        logger.info(
+            "claim.withdrawn",
+            extra={
+                "claimNumber": claim.claim_number,
+                "fromStatus": before_status.value,
+                "actorRole": actor.role,
+            },
+        )
+        return self._claims.refresh(claim)
 
     # --- reviewer assignment -------------------------------------------------
 
@@ -1207,6 +1504,27 @@ class ClaimService:
             return ClaimStatus.coerce(value)
         except ValueError as exc:
             raise ValidationError(str(exc), details={"field": "status"})
+
+    @staticmethod
+    def _coerce_statuses(value: Union[str, Sequence[str], None]) -> Optional[list[ClaimStatus]]:
+        """Like :meth:`_coerce_status`, but for the ``status`` filter's OR-list form.
+
+        Accepts a bare string (the common single-value case) or a sequence of strings (repeated
+        ``?status=`` query params) — a bare string is *not* iterated character-by-character, which
+        ``list(value)`` would otherwise silently do.
+        """
+        if not value:
+            return None
+        raw_values = [value] if isinstance(value, str) else list(value)
+        coerced: list[ClaimStatus] = []
+        for raw in raw_values:
+            if not raw:
+                continue
+            try:
+                coerced.append(ClaimStatus.coerce(raw))
+            except ValueError as exc:
+                raise ValidationError(str(exc), details={"field": "status"})
+        return coerced or None
 
     @staticmethod
     def _coerce_risk_level(value: Optional[str]) -> Optional[FraudRiskLevel]:

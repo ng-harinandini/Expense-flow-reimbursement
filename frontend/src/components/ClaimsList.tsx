@@ -109,11 +109,11 @@ export const ClaimsList: React.FC<ClaimsListProps> = ({
         >
           <option value="ALL">All Categories</option>
           <option value="Meals">Meals</option>
-          <option value="Ground Transport">Ground Transport</option>
-          <option value="Flights">Flights</option>
-          <option value="Lodging">Lodging</option>
-          <option value="Client Entertainment">Client Entertainment</option>
-          <option value="Software & Subscriptions">Software & Subscriptions</option>
+          <option value="Taxi / Cab / Ride-hailing">Ground Transport</option>
+          <option value="Air Travel">Flights</option>
+          <option value="Hotel / Lodging">Lodging</option>
+          <option value="Client / Business Entertainment">Client Entertainment</option>
+          <option value="Software / Subscriptions">Software & Subscriptions</option>
         </select>
 
         {/* Status Filter */}
