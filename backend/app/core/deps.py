@@ -24,13 +24,16 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.ai.classification.service import DocumentClassificationService
+from app.ai.core.config import ai_settings
 from app.ai.duplicate_detection.service import DuplicateDetectionService
+from app.ai.extraction.receipt_extractor import BedrockReceiptExtractor
 from app.ai.governance.feature_flags import PersistedFeatureFlagStore
 from app.ai.knowledge.service import KnowledgeService
 from app.ai.prompts.registry import PromptRegistry
 from app.ai.registry.flags import feature_flags
 from app.ai.services.composition import build_duplicate_detection_service, build_knowledge_service
 from app.core.database import get_db
+from app.core.logging import get_logger
 from app.core.security import TokenError, verify_access_token
 from app.core.unit_of_work import UnitOfWork
 from app.domain.actor import Actor
@@ -48,6 +51,9 @@ from app.services.claim_service import ClaimService
 from app.services.employee_service import EmployeeService
 from app.services.category_service import CategoryService
 from app.services.policy_rule_service import PolicyRuleService
+from app.services.receipt_extraction import ReceiptExtractor, TextractReceiptExtractor
+
+logger = get_logger(__name__)
 
 # The only valid application roles (mirrors frontend/src/types.ts UserRole).
 VALID_ROLES = frozenset({"employee", "manager", "finance", "admin", "auditor"})
@@ -252,6 +258,33 @@ def get_optional_document_classification(
     if not feature_flags.is_enabled("ai.category_classification"):
         return None
     return service
+
+
+def get_receipt_extractor(
+    category_repository: CategoryRepository = Depends(get_category_repository),
+    ai_inference_repository: AIInferenceRepository = Depends(get_ai_inference_repository),
+) -> ReceiptExtractor:
+    """Which engine reads an uploaded receipt: AWS Textract, or one multimodal Bedrock call.
+
+    A provider switch rather than a feature flag, so it is read from settings here rather than from
+    the flag tree — the same treatment ``AI_RULE_EXTRACTION_PROVIDER`` gets. The default is
+    ``textract``, which leaves an untouched deployment behaving exactly as it did before this
+    dependency existed.
+
+    The choice is made here, in ``deps``, for the same reason the classification flag is: the route
+    depends on the ``ReceiptExtractor`` protocol in ``app.services``, so ``app/api`` never imports
+    ``app.ai``. An unrecognized provider name falls back to Textract with a warning rather than
+    failing the request — a typo in an env var must not take receipt upload down.
+    """
+    provider = (ai_settings.RECEIPT_EXTRACTION_PROVIDER or "").strip().lower()
+    if provider == "bedrock":
+        return BedrockReceiptExtractor(category_repository, ai_inference_repository)
+    if provider not in ("", "textract"):
+        logger.warning(
+            "receipt.unknown_extraction_provider",
+            extra={"provider": provider[:64], "using": "textract"},
+        )
+    return TextractReceiptExtractor()
 
 
 def get_audit_service(

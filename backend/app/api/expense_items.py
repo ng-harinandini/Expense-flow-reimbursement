@@ -14,10 +14,12 @@ The ``200`` (not ``201``) is the contract: no resource was created.
 from __future__ import annotations
 
 import uuid
+from functools import partial
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 
 from app.ai.duplicate_detection.hashing import sha256_hex
 from app.core.config import settings
@@ -28,6 +30,7 @@ from app.core.deps import (
     get_claim_repository,
     get_claim_service,
     get_employee_service,
+    get_receipt_extractor,
     get_unit_of_work,
     require_roles,
 )
@@ -41,12 +44,12 @@ from app.services import receipt_extraction
 from app.services.audit_service import AuditService
 from app.services.claim_service import ClaimService
 from app.services.employee_service import EmployeeService
+from app.services.receipt_extraction import ReceiptExtractor
 from app.services.s3_service import (
     S3DownloadError,
     download_receipt_from_s3,
     upload_receipt_to_s3,
 )
-from app.services.textract_service import analyze_receipt_with_textract
 
 logger = get_logger(__name__)
 
@@ -127,6 +130,7 @@ async def upload_receipt(
     claims: ClaimRepository = Depends(get_claim_repository),
     audit: AuditService = Depends(get_audit_service),
     uow: UnitOfWork = Depends(get_unit_of_work),
+    extractor: ReceiptExtractor = Depends(get_receipt_extractor),
 ):
     """Store a receipt, extract it, and return the data — without creating a claim or item."""
     actor = Actor.from_current_user(current)
@@ -163,12 +167,36 @@ async def upload_receipt(
     )
     stored = upload_receipt_to_s3(data, key, file.content_type)
 
-    extraction = analyze_receipt_with_textract(
-        data=data,
-        s3_bucket=stored.get("bucket") if stored.get("stored") else None,
-        s3_key=stored.get("key") if stored.get("stored") else None,
-        file_name=file.filename or "receipt",
-    )
+    # Which engine runs is a deployment setting (AI_RECEIPT_EXTRACTION_PROVIDER); both return the
+    # same shape, and both degrade to an empty result rather than raising, so a scan failure costs
+    # the employee a pre-filled form and never the upload.
+    #
+    # Off the event loop: both engines block (boto3), and the Bedrock one also rasterizes PDFs, for
+    # up to AI_RECEIPT_EXTRACTION_TIMEOUT_SECONDS. Held on the loop, that would stall every other
+    # request this worker is serving, healthchecks included.
+    try:
+        extraction = await run_in_threadpool(
+            partial(
+                extractor.extract,
+                data=data,
+                mime_type=file.content_type,
+                file_name=file.filename or "receipt",
+                s3_bucket=stored.get("bucket") if stored.get("stored") else None,
+                s3_key=stored.get("key") if stored.get("stored") else None,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - the scan is advisory; the stored upload is not
+        # Both engines already degrade internally rather than raise, so reaching here means one
+        # broke its own contract. The object is in S3 and still needs auditing below, and the
+        # employee can fill the fields in by hand — none of which is worth losing to a 500.
+        logger.exception(
+            "receipt.extraction_raised",
+            extra={"fileHash": file_hash, "mimeType": file.content_type, "error": str(exc)[:300]},
+        )
+        extraction = receipt_extraction.empty_extraction(
+            file.filename or "receipt", f"Extraction engine failed: {exc}"
+        )
+
     suggestions = receipt_extraction.summarize_extraction(extraction)
 
     # An S3 object was created; an unaudited write to object storage is a compliance gap even
@@ -196,7 +224,14 @@ async def upload_receipt(
         suggestedDate=suggestions["transactionDate"],
         suggestedAmount=suggestions["totalAmount"],
         suggestedCurrency=suggestions["currency"],
-        suggestedCategory=(categoryHint or "").strip() or None,
+        # Only the Bedrock engine can suggest a category — Textract has no notion of one, and
+        # leaves these null, so that path still just echoes the caller's hint as it always did.
+        suggestedCategory=extraction.get("suggestedCategory")
+        or (categoryHint or "").strip()
+        or None,
+        suggestedCategoryConfidence=extraction.get("categoryConfidence"),
+        documentType=extraction.get("documentType"),
+        categoryFields=extraction.get("categoryFields"),
         duplicateOfClaimNumber=duplicate_of,
         errorMessage=extraction.get("error"),
     )

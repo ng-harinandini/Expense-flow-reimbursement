@@ -29,6 +29,8 @@ import {
 } from "@/components/my_claims/columns";
 import { ClaimStatusStepper } from "@/components/my_claims/ClaimStatusStepper";
 
+import { isManagerActionable } from "./columns";
+
 type PendingAction = "reject" | "send_back" | null;
 
 const REASON_COPY: Record<Exclude<PendingAction, null>, { label: string; placeholder: string; confirmLabel: string }> = {
@@ -82,7 +84,8 @@ export function ClaimReviewDialog({
   const selectedItem =
     claim.items.find((item) => item.id === selectedItemId) ?? claim.items[0];
   const isWithdrawn = claim.status === "Withdrawn";
-  const actionsDisabled = isSubmitting || isWithdrawn;
+  const actionable = isManagerActionable(claim);
+  const actionsDisabled = isSubmitting || !actionable;
 
   const handleApprove = async () => {
     setIsSubmitting(true);
@@ -269,9 +272,11 @@ export function ClaimReviewDialog({
             </div>
           ) : (
             <div className="flex flex-wrap items-center justify-end gap-2">
-              {isWithdrawn && (
+              {!actionable && (
                 <p className="mr-auto text-sm text-muted-foreground">
-                  No further action is possible on a withdrawn claim.
+                  {isWithdrawn
+                    ? "No further action is possible on a withdrawn claim."
+                    : "This claim has moved past manager review — no further action is possible here."}
                 </p>
               )}
               <Button

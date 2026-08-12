@@ -202,6 +202,29 @@ class AISettings(BaseSettings):
     # short and the output budget is small, so 30s leaves headroom without risking a truncated call.
     CLASSIFICATION_TIMEOUT_SECONDS: float = 30.0
 
+    # --- receipt extraction (the OCR layer itself) ---------------------------
+    # Which engine turns an uploaded receipt into structured data. ``textract`` is AWS Textract's
+    # AnalyzeExpense, the original path. ``bedrock`` replaces it with a single multimodal Gemma call
+    # that returns the same summary *and* a category suggestion, so the submission form can be
+    # pre-filled before a claim exists — Textract has no notion of an expense category.
+    #
+    # This is a provider switch, not a feature flag, and so has no entry in the flag tree (same as
+    # RULE_EXTRACTION_PROVIDER above). The default keeps an untouched deployment on Textract.
+    #
+    # The two are strictly alternatives: a failure on the ``bedrock`` path degrades to the same empty
+    # result Textract returns when disabled, and never silently reaches for the other engine. A
+    # deployment that switched providers should see that it switched.
+    RECEIPT_EXTRACTION_PROVIDER: str = "textract"  # textract | bedrock
+    # Required when the provider is ``bedrock``; keep model selection in the deployment environment.
+    RECEIPT_EXTRACTION_MODEL: Optional[str] = None
+    # Larger than CLASSIFICATION_MAX_OUTPUT_TOKENS because this one call carries the whole receipt
+    # summary, its line items *and* the category's fields. Truncated JSON is unparseable, which
+    # costs the entire extraction rather than one field.
+    RECEIPT_EXTRACTION_MAX_OUTPUT_TOKENS: int = 4096
+    # Looser than CLASSIFICATION_TIMEOUT_SECONDS: that budget is shared between several items of one
+    # claim submission, whereas this runs once per upload, for a correspondingly larger output.
+    RECEIPT_EXTRACTION_TIMEOUT_SECONDS: float = 45.0
+
     # --- caching (Task 15) --------------------------------------------------
     CACHE_BACKEND: Literal["memory", "redis", "none"] = "memory"
     CACHE_REDIS_URL: Optional[str] = None

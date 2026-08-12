@@ -23,6 +23,20 @@ export interface ReceiptExtraction {
   suggestedDate: string | null;
   suggestedAmount: number | null;
   suggestedCurrency: string | null;
+  /**
+   * The category the extractor read off the receipt. Only populated when the backend runs on
+   * `AI_RECEIPT_EXTRACTION_PROVIDER=bedrock` — Textract transcribes a document but cannot say what
+   * kind of expense it is — so treat null as "no suggestion", not "no category".
+   *
+   * It is a category *name* from the database, which is why the dropdown renders the live list.
+   */
+  suggestedCategory: string | null;
+  /** 0-1 confidence in `suggestedCategory`; null when nothing classified. */
+  suggestedCategoryConfidence: number | null;
+  /** What the document is, e.g. "hotel invoice" — a label, not a category. */
+  documentType: string | null;
+  /** Values for the suggested category's custom fields, keyed by field name. Not rendered yet. */
+  categoryFields: Record<string, unknown> | null;
   // --- advisory, never blocking ---
   duplicateOfClaimNumber: string | null;
   errorMessage: string | null;

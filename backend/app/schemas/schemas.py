@@ -618,7 +618,18 @@ class ReceiptExtractionSchema(BaseModel):
     suggestedDate: Optional[str] = None
     suggestedAmount: Optional[float] = None
     suggestedCurrency: Optional[str] = None
+    #: Only ever populated when ``AI_RECEIPT_EXTRACTION_PROVIDER=bedrock``: Textract transcribes a
+    #: document but has no notion of an expense category. On the Textract path this stays the echo
+    #: of the caller's ``categoryHint`` that it has always been.
     suggestedCategory: Optional[str] = None
+    #: 0-1 confidence in ``suggestedCategory``. ``None`` when nothing classified — deliberately not
+    #: conflated with ``0.0``, which would mean "classified, and certain it is wrong".
+    suggestedCategoryConfidence: Optional[float] = None
+    #: Free-text label for what the document is ("hotel invoice"). Never a category name.
+    documentType: Optional[str] = None
+    #: Values for the suggested category's ``custom_fields`` plus the shared COMMON ones, keyed by
+    #: field ``name``. Returned for the client to present; nothing renders them yet.
+    categoryFields: Optional[Dict[str, Any]] = None
 
     # --- advisory, never blocking ---
     duplicateOfClaimNumber: Optional[str] = None

@@ -7,6 +7,18 @@ import {
   StatusBadge,
 } from "@/components/my_claims/columns";
 
+/**
+ * Whether the *manager* review step is still the one waiting on this claim.
+ *
+ * The table lists every claim filed by the manager's team regardless of status (so the manager can
+ * see where things ended up), but once a claim leaves `Manager_Review` — escalated to finance,
+ * approved, rejected, or flagged for fraud — it is no longer this reviewer's turn. Mirrors
+ * `isFinanceActionable` in `finance_approvals/columns.tsx`.
+ */
+export function isManagerActionable(claim: Claim): boolean {
+  return claim.status === "Manager_Review";
+}
+
 export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[] {
   return [
     {
@@ -67,7 +79,7 @@ export function buildColumnDefs(onView: (claim: Claim) => void): ColDef<Claim>[]
           className="text-sm font-medium text-secondary hover:underline"
           onClick={() => params.data && onView(params.data)}
         >
-          {params.data?.status === "Withdrawn" ? "View Details" : "Take Action"}
+          {params.data && isManagerActionable(params.data) ? "Take Action" : "View Details"}
         </button>
       ),
     },
