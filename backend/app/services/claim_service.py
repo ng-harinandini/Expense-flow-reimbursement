@@ -82,6 +82,27 @@ CLAIM_ACTIONS = frozenset({"APPROVE", "REJECT", "FLAG_FRAUD"})
 #: How many peer claims to compare against during fraud screening.
 FRAUD_CORPUS_LIMIT = 200
 
+#: ``_evaluate_item_policy``'s report when the legacy category policy engine is off
+#: (``POLICY_RULES_ENGINE_ENABLED=false``, the default) — a clean pass, never a hold, so an item
+#: that would otherwise have no policy opinion at all isn't held for "missing configuration".
+_POLICY_ENGINE_DISABLED_REPORT: dict[str, Any] = {
+    "overallPassed": True,
+    "requiresManualReview": False,
+    "isWithinMaxLimit": True,
+    "isWithinAutoApproveLimit": True,
+    "maxLimitAllowed": None,
+    "autoApproveLimit": None,
+    "receiptRequired": False,
+    "receiptProvided": True,
+    "daysSinceExpense": None,
+    "requiresDirectorApprovalForAge": False,
+    "checks": [],
+    "reasoningSummary": (
+        "Category policy engine is disabled (POLICY_RULES_ENGINE_ENABLED=false); "
+        "no category-level policy check was run."
+    ),
+}
+
 # Which decision-memory kind a claim's resulting status is recorded as, from the outer `action()`
 # hook. A status with no entry here is not recorded from there: Draft/Submitted/Processing are not
 # yet a "decision" worth remembering, and FLAGGED_FRAUD is deliberately absent because
@@ -178,7 +199,7 @@ class ClaimService:
         fraud_repository: FraudResultRepository,
         workflow_repository: ApprovalWorkflowRepository,
         employee_service: EmployeeService,
-        policy_rule_service: PolicyRuleService,
+        policy_rule_service: Optional[PolicyRuleService],
         audit_service: AuditService,
         decision_memory: Optional[DecisionMemoryRecorder] = None,
         duplicate_detection: Optional[DuplicateDetectionRecorder] = None,
@@ -189,6 +210,10 @@ class ClaimService:
         self._fraud = fraud_repository
         self._workflows = workflow_repository
         self._employees = employee_service
+        # None means the legacy category policy engine (`policy_rules` table) is skipped during
+        # claim processing — see `POLICY_RULES_ENGINE_ENABLED` / `get_optional_policy_rule_service`
+        # in `app.core.deps`. `claim_policy_rules` (below, `self._travel_policy_rules`) is the
+        # current engine and is never gated by this.
         self._policies = policy_rule_service
         self._audit = audit_service
         # None (the default, and what every existing caller/test still constructs with) means the
@@ -635,7 +660,9 @@ class ClaimService:
         # Fetching per item would mean two lines of one report judged under different rule
         # versions — surprising to a reviewer reading a single decision.
         earliest = min((i.expense_date for i in claim.items), default=date.today())
-        rules = self._policies.rules_for_engine(earliest)
+        # self._policies is None when POLICY_RULES_ENGINE_ENABLED is off (the default) — nothing to
+        # fetch, and _evaluate_item_policy short-circuits before ever reading `rules`.
+        rules = self._policies.rules_for_engine(earliest) if self._policies is not None else []
 
         # The peer corpus is read once, then grown as each item is judged: without appending, the
         # split-transaction check could not see that two items of *this* claim share a vendor and
@@ -661,6 +688,18 @@ class ClaimService:
             )
             item.hold_reason = self._build_hold_reason(
                 item.status, policy_report, fraud_report, classification_report, travel_policy_report
+            )
+            logger.info(
+                "claim.item.routed",
+                extra={
+                    "claimId": str(claim.id),
+                    "claimNumber": claim.claim_number,
+                    "itemId": str(item.id),
+                    "lineNumber": item.line_number,
+                    "category": item.category,
+                    "status": item.status.value,
+                    "holdReason": item.hold_reason,
+                },
             )
             policy_reports.append(policy_report)
             fraud_reports.append(fraud_report)
@@ -714,9 +753,35 @@ class ClaimService:
         The engine itself is unchanged — it has always judged a single expense. The report is
         stored per item because the claim's roll-up is per item: a reviewer must be able to see
         *which* line held the claim, not just that something did.
+
+        ``self._policies is None`` (``POLICY_RULES_ENGINE_ENABLED`` off, the default) short-circuits
+        to a clean no-opinion report *before* calling the engine — deliberately not "call it with an
+        empty ruleset", which would instead read as every category having no configured policy and
+        hold every item for manual review. ``claim_policy_rules``
+        (:meth:`_evaluate_travel_policy`) is the current engine and is unaffected by this flag.
         """
+        if self._policies is None:
+            report = dict(_POLICY_ENGINE_DISABLED_REPORT)
+            item.policy_validation = report
+            return report
+
         report = evaluate_expense_policy(item_to_engine_input(item, claim=claim), rules)
         item.policy_validation = report
+
+        log_context = {
+            "claimId": str(claim.id),
+            "claimNumber": claim.claim_number,
+            "itemId": str(item.id),
+            "lineNumber": item.line_number,
+            "category": item.category,
+            "overallPassed": report.get("overallPassed"),
+            "requiresManualReview": report.get("requiresManualReview"),
+            "reasoningSummary": report.get("reasoningSummary"),
+        }
+        if not report.get("overallPassed") or report.get("requiresManualReview"):
+            logger.warning("claim.policy_validation.flagged", extra=log_context)
+        else:
+            logger.info("claim.policy_validation.evaluated", extra=log_context)
 
         self._claims.record_step(
             claim,
@@ -758,6 +823,36 @@ class ClaimService:
         for item, report in zip(claim.items, reports):
             item.travel_policy_validation = report
             by_item_id[item.id] = report
+
+            log_context = {
+                "claimId": str(claim.id),
+                "claimNumber": claim.claim_number,
+                "itemId": str(item.id),
+                "lineNumber": item.line_number,
+                "category": item.category,
+                "overallPassed": report.get("overallPassed"),
+                "requiresManualReview": report.get("requiresManualReview"),
+                "eligibleAmount": report.get("eligibleAmount"),
+                "reasoningSummary": report.get("reasoningSummary"),
+            }
+            if not report.get("overallPassed") or report.get("requiresManualReview"):
+                logger.warning("claim.travel_policy.flagged", extra=log_context)
+            else:
+                logger.info("claim.travel_policy.evaluated", extra=log_context)
+
+            self._claims.record_step(
+                claim,
+                actor_name="ExpenseFlow Travel Policy Engine",
+                actor_role="admin",
+                step_name=f"Local Travel Policy (item {item.line_number})",
+                action=(
+                    "Passed local travel policy constraints"
+                    if report.get("overallPassed")
+                    else "Flagged local travel policy violation"
+                ),
+                notes=report.get("reasoningSummary"),
+                outcome="SUCCESS" if report.get("overallPassed") else "WARNING",
+            )
         return by_item_id
 
     def _screen_item_fraud(
@@ -770,6 +865,22 @@ class ClaimService:
         item.fraud_risk_level = FraudRiskLevel.coerce(report["riskLevel"])
         item.fraud_flags = report["flags"]
         item.is_fraud_flagged = bool(report["isFlagged"])
+
+        log_context = {
+            "claimId": str(claim.id),
+            "claimNumber": claim.claim_number,
+            "itemId": str(item.id),
+            "lineNumber": item.line_number,
+            "category": item.category,
+            "riskScore": report["riskScore"],
+            "riskLevel": report["riskLevel"],
+            "isFlagged": report["isFlagged"],
+            "rationale": report["rationale"],
+        }
+        if report["isFlagged"]:
+            logger.warning("claim.fraud_screening.flagged", extra=log_context)
+        else:
+            logger.info("claim.fraud_screening.evaluated", extra=log_context)
 
         self._claims.record_step(
             claim,

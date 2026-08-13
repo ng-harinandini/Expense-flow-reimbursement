@@ -32,6 +32,7 @@ from app.ai.knowledge.service import KnowledgeService
 from app.ai.prompts.registry import PromptRegistry
 from app.ai.registry.flags import feature_flags
 from app.ai.services.composition import build_duplicate_detection_service, build_knowledge_service
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.logging import get_logger
 from app.core.security import TokenError, verify_access_token
@@ -330,6 +331,22 @@ def get_policy_rule_service(
     return PolicyRuleService(policy_rule_repository, audit_service)
 
 
+def get_optional_policy_rule_service(
+    policy_rule_service: PolicyRuleService = Depends(get_policy_rule_service),
+) -> Optional[PolicyRuleService]:
+    """``ClaimService``'s legacy category-policy-engine dependency, or ``None`` when
+    ``POLICY_RULES_ENGINE_ENABLED`` is off (the default).
+
+    Same reasoning as :func:`get_optional_decision_memory`: the flag is decided here, not inside
+    ``ClaimService``, so a disabled engine leaves the claim pipeline byte-identical to never having
+    called it. Does not affect the standalone `policy_rules` admin CRUD API, which depends on
+    :func:`get_policy_rule_service` directly rather than through ``ClaimService``.
+    """
+    if not settings.POLICY_RULES_ENGINE_ENABLED:
+        return None
+    return policy_rule_service
+
+
 def get_category_service(
     category_repository: CategoryRepository = Depends(get_category_repository),
     audit_service: AuditService = Depends(get_audit_service),
@@ -342,7 +359,7 @@ def get_claim_service(
     fraud_repository: FraudResultRepository = Depends(get_fraud_repository),
     workflow_repository: ApprovalWorkflowRepository = Depends(get_workflow_repository),
     employee_service: EmployeeService = Depends(get_employee_service),
-    policy_rule_service: PolicyRuleService = Depends(get_policy_rule_service),
+    policy_rule_service: Optional[PolicyRuleService] = Depends(get_optional_policy_rule_service),
     audit_service: AuditService = Depends(get_audit_service),
     decision_memory: Optional[KnowledgeService] = Depends(get_optional_decision_memory),
     duplicate_detection: Optional[DuplicateDetectionService] = Depends(
