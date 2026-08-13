@@ -22,8 +22,15 @@ interface CreateClaimItem {
   ocrConfidence?: Record<string, number> | null;
   ocrExtractedJson?: Record<string, unknown> | null;
   /**
-   * Fields the form collects that have no dedicated column on `ExpenseItemCreateSchema` yet
-   * (invoice number, travel route/type, attendee/day counts). Packed here rather than dropped
+   * Scope for the local-travel policy engine (see doc/travel-policy-rules.md) — must be sent at
+   * this top level, not inside `employeeCorrectedData`, or `evaluate_travel_policy` never matches
+   * a rule for the item regardless of what the employee selected.
+   */
+  travelType?: string;
+  duration?: string;
+  /**
+   * Fields the form collects that have no dedicated column on `ExpenseItemCreateSchema`
+   * (invoice number, travel route, attendee/day counts). Packed here rather than dropped
    * silently — the backend already accepts this as freeform JSON.
    */
   employeeCorrectedData?: Record<string, unknown> | null;
@@ -63,10 +70,14 @@ function buildItem(draft: ExpenseItemDraft): CreateClaimItem {
     ocrSource: ext?.ocrSource,
     ocrConfidence: ext?.ocrConfidence ?? null,
     ocrExtractedJson: (ext?.extraction as Record<string, unknown> | null) ?? null,
+    // The only two values the seeded rules currently scope on (doc/travel-policy-rules.md) are
+    // "Local" travel taken over a "Day" — there's no UI control for `duration` yet, and every
+    // rule's duration axis is either "Day" or a wildcard, so this is never wrong to send.
+    travelType: draft.travelType || undefined,
+    duration: "Day",
     employeeCorrectedData: {
       invoiceNumber: draft.invoiceNumber || undefined,
       travelRoute: draft.travelRoute || undefined,
-      travelType: draft.travelType || undefined,
       numberOfAttendees: draft.numberOfAttendees,
       numberOfDays: draft.numberOfDays,
     },
