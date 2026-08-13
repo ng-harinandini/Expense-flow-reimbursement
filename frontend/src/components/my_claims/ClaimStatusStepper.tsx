@@ -56,7 +56,7 @@ const TERMINAL_STEP_INDEX_BY_STATUS: Record<ClaimStatus, number> = {
   Submitted: 0,
   // AI scanning is invisible in the stepper now — the claim just stays on
   // "Submitted" until manager review actually begins.
-  Processing_AI: 0,
+  Processing: 0,
   Auto_Approved: 2,
   Manager_Review: 1,
   Finance_Review: 2,
@@ -65,6 +65,8 @@ const TERMINAL_STEP_INDEX_BY_STATUS: Record<ClaimStatus, number> = {
   Disbursed: 2,
   Flagged_Fraud: 1,
   Withdrawn: 0,
+  // Processing never got past "Submitted" before it failed.
+  Failed: 0,
 };
 
 export function getCurrentStepIndex(status: ClaimStatus): number {
@@ -78,6 +80,7 @@ const STEP_STATUS_LABEL_OVERRIDE: Partial<Record<ClaimStatus, string>> = {
   Rejected: "Rejected",
   Flagged_Fraud: "Flagged for review",
   Withdrawn: "Withdrawn",
+  Failed: "Processing failed",
 };
 
 interface StepVisualOverride {
@@ -99,6 +102,8 @@ function getCurrentStepOverride(status: ClaimStatus): StepVisualOverride | null 
       return { icon: X, circleClass: "bg-destructive text-white", textClass: "text-destructive" };
     case "Flagged_Fraud":
       return { icon: AlertTriangle, circleClass: "bg-destructive text-white", textClass: "text-destructive" };
+    case "Failed":
+      return { icon: X, circleClass: "bg-destructive text-white", textClass: "text-destructive" };
     case "Withdrawn":
       // Neutral, not destructive: the employee chose to close this, nothing went wrong.
       return { icon: Undo2, circleClass: "bg-muted text-muted-foreground", textClass: "text-muted-foreground" };

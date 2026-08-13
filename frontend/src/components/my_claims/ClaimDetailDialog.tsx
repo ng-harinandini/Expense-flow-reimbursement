@@ -19,7 +19,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/Button";
 import { ReceiptViewer } from "@/components/ReceiptViewer";
-import { useWithdrawClaimMutation } from "@/api/claims";
+import { useClaimQuery, useWithdrawClaimMutation } from "@/api/claims";
 import { getErrorMessage } from "@/lib/apiError";
 import { INITIAL_EMPLOYEES } from "@/data/initialClaims";
 import type { Claim } from "@/types";
@@ -46,7 +46,7 @@ function getCurrentStepCopy(
         title: "Currently: Submitted",
         body: "Your claim has been received and is queued for AI scanning.",
       };
-    case "Processing_AI":
+    case "Processing":
       return {
         title: "Currently: AI scanning",
         body: "Our system is extracting receipt data and validating policy compliance.",
@@ -91,6 +91,11 @@ function getCurrentStepCopy(
         title: "Currently: Withdrawn",
         body: "You withdrew this claim, so it's closed and no longer under review. Submit a new claim if you need to file these expenses again.",
       };
+    case "Failed":
+      return {
+        title: "Currently: Processing failed",
+        body: "Automated processing hit an error. Contact support or resubmit — see the reason below.",
+      };
     default:
       return {
         title: "Currently: Draft",
@@ -104,7 +109,7 @@ function getCurrentStepCopy(
 // the button is disabled rather than letting the user discover it through an error.
 const WITHDRAWABLE_STATUSES = new Set<Claim["status"]>([
   "Submitted",
-  "Processing_AI",
+  "Processing",
   "Manager_Review",
   "Finance_Review",
   "Auto_Approved",
@@ -117,13 +122,20 @@ interface ClaimDetailDialogProps {
 }
 
 export function ClaimDetailDialog({
-  claim,
+  claim: claimProp,
   open,
   onOpenChange,
 }: ClaimDetailDialogProps) {
   const [selectedItemId, setSelectedItemId] = React.useState<string>("");
   const [withdrawReason, setWithdrawReason] = React.useState("");
   const [withdrawError, setWithdrawError] = React.useState<string | null>(null);
+
+  // Poll the live claim while the dialog is open, so a claim still `Submitted`/`Processing`
+  // when the row was clicked (or one that changes status while the dialog sits open) doesn't show
+  // a stale snapshot forever. `claimProp` (the clicked grid row) is the fallback shown before the
+  // first live fetch resolves — same data on first paint, then this hook keeps it current.
+  const { data: liveClaim } = useClaimQuery(claimProp?.id, { enabled: open });
+  const claim = liveClaim ?? claimProp;
 
   // Default to the first expense item whenever a (new) claim is opened.
   React.useEffect(() => {
@@ -184,6 +196,18 @@ export function ClaimDetailDialog({
             {formatCurrency(claim.totalAmount)}
           </p>
         </DialogHeader>
+
+        {claim.status === "Failed" && (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-destructive">
+              Processing failed
+            </p>
+            <p className="mt-1 text-sm text-foreground">
+              {claim.holdReason?.trim() ||
+                "Automated processing hit an unexpected error. Please contact support."}
+            </p>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[auto_22rem_1fr]">
           {/* Column 1 — progress stepper */}

@@ -7,7 +7,7 @@ the canonical Phase 1 lifecycle vocabulary. Where the two differ, the mapping is
 
     canonical (spec)   member name         wire value / DB value
     ----------------   -----------------   ---------------------
-    Processing         PROCESSING          "Processing_AI"
+    Processing         PROCESSING          "Processing"
     Pending Review     MANAGER_REVIEW      "Manager_Review"
     Pending Review     FINANCE_REVIEW      "Finance_Review"
     Reimbursed         REIMBURSED          "Disbursed"
@@ -70,7 +70,7 @@ class ClaimStatus(_WireEnum):
 
     DRAFT = "Draft"
     SUBMITTED = "Submitted"
-    PROCESSING = "Processing_AI"
+    PROCESSING = "Processing"
     AUTO_APPROVED = "Auto_Approved"
     MANAGER_REVIEW = "Manager_Review"
     FINANCE_REVIEW = "Finance_Review"
@@ -79,11 +79,12 @@ class ClaimStatus(_WireEnum):
     REIMBURSED = "Disbursed"
     FLAGGED_FRAUD = "Flagged_Fraud"
     WITHDRAWN = "Withdrawn"
+    FAILED = "Failed"
 
 
 # Canonical spec spellings accepted as input (normalized: upper + underscores).
 ClaimStatus._aliases = {  # type: ignore[attr-defined]
-    "PROCESSING_AI": ClaimStatus.PROCESSING.value,
+    "Processing": ClaimStatus.PROCESSING.value,
     "PENDING_REVIEW": ClaimStatus.MANAGER_REVIEW.value,
     "DISBURSED": ClaimStatus.REIMBURSED.value,
     "REIMBURSED": ClaimStatus.REIMBURSED.value,

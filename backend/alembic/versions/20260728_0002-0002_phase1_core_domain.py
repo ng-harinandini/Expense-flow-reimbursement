@@ -41,7 +41,7 @@ depends_on: Union[str, Sequence[str], None] = None
 CLAIM_STATUS_VALUES = (
     "Draft",
     "Submitted",
-    "Processing_AI",
+    "Processing",
     "Auto_Approved",
     "Manager_Review",
     "Finance_Review",
@@ -76,11 +76,11 @@ def _enum(name: str, values: Sequence[str]) -> postgresql.ENUM:
 # Frozen copy of the legal lifecycle edges at this revision.
 CLAIM_TRANSITIONS: tuple[tuple[str, str], ...] = (
     ("Draft", "Submitted"),
-    ("Submitted", "Processing_AI"),
-    ("Processing_AI", "Auto_Approved"),
-    ("Processing_AI", "Manager_Review"),
-    ("Processing_AI", "Finance_Review"),
-    ("Processing_AI", "Flagged_Fraud"),
+    ("Submitted", "Processing"),
+    ("Processing", "Auto_Approved"),
+    ("Processing", "Manager_Review"),
+    ("Processing", "Finance_Review"),
+    ("Processing", "Flagged_Fraud"),
     ("Auto_Approved", "Approved"),
     ("Auto_Approved", "Disbursed"),
     ("Auto_Approved", "Manager_Review"),

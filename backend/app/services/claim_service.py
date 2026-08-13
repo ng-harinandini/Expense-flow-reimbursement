@@ -383,14 +383,30 @@ class ClaimService:
     # --- submission ----------------------------------------------------------
 
     def submit_claim(self, payload: dict[str, Any], *, actor: Actor) -> Claim:
-        """Create and fully process a claim: Draft → Submitted → Processing → routed.
+        """Create a claim and hand it to the AI pipeline: Draft → Submitted → Processing → routed.
 
-        Mirrors ``POST /claims``, which has always been a create-and-submit call. All of it runs in
-        the caller's single transaction.
+        Mirrors ``POST /claims``, which has always been a create-and-submit call. Kept as one call
+        for existing callers (tests, any non-HTTP caller) that want the whole pipeline to run
+        synchronously and return the final routed claim — ``POST /claims`` itself no longer calls
+        this directly; see :meth:`create_and_submit_claim` / :meth:`process_submitted_claim` for the
+        split that lets the route return as soon as the claim is ``Submitted``.
 
         The employee must have an active reporting manager: the manager is the first approval step
         (see :meth:`_start_workflow`), so without one the claim has no approver. That precondition
         is checked before anything is written, so a rejected submission leaves no draft behind.
+        """
+        claim, actor = self.create_and_submit_claim(payload, actor=actor)
+        return self.process_submitted_claim(claim, actor=actor)
+
+    def create_and_submit_claim(
+        self, payload: dict[str, Any], *, actor: Actor
+    ) -> tuple[Claim, Actor]:
+        """Draft → Submitted only. The AI pipeline (:meth:`process_submitted_claim`) is a separate
+        step so ``POST /claims`` can commit and respond here, then run the pipeline as a background
+        task instead of holding the request open for it.
+
+        Returns the claim together with ``actor`` (renamed to the employee's full name) since the
+        caller needs the same actor identity to later call :meth:`process_submitted_claim`.
         """
         employee = self._employees.resolve_actor_employee(actor)
         validators.require_reporting_manager(employee)
@@ -408,8 +424,16 @@ class ClaimService:
             step_name="Submit Claim",
             action=f"Submitted expense claim {claim.claim_number}",
         )
+        return claim, actor
 
-        # Submitted → Processing → routed (machine-driven)
+    def process_submitted_claim(self, claim: Claim, *, actor: Actor) -> Claim:
+        """Submitted → Processing → routed (machine-driven), then audit + decision-memory.
+
+        Runs in its own transaction (the caller commits). On any unhandled exception from
+        :meth:`_process`, callers running this in the background should catch it and route the
+        claim to ``ClaimStatus.FAILED`` instead of leaving it stuck in ``Processing`` forever — see
+        ``app.api.claims._run_claim_pipeline``.
+        """
         self._process(claim, actor=actor)
 
         categories = ", ".join(sorted({i.category for i in claim.items}))
@@ -441,6 +465,29 @@ class ClaimService:
         # self._scan_duplicates(claim)
         # History, comments, fraud result and workflow were inserted during this transaction;
         # expire so the serialized aggregate reflects all of them.
+        return self._claims.refresh(claim)
+
+    def mark_claim_failed(self, claim: Claim, *, actor: Actor, reason: str) -> Claim:
+        """Processing → Failed, for when :meth:`process_submitted_claim` raised.
+
+        Called from a fresh transaction (the one the background task opened after rolling back the
+        failed attempt). ``actor`` is the employee who originally submitted the claim — same
+        convention :meth:`_process` uses for its own system-role transitions (``actor_role`` is
+        ``SYSTEM_ROLE``, but ``actor_sub``/``actor_name`` still identify whose claim this was).
+        """
+        system = Actor.system()
+        claim.hold_reason = reason
+        self._claims.transition_status(
+            claim,
+            ClaimStatus.FAILED,
+            actor_role=SYSTEM_ROLE,
+            actor_sub=actor.sub,
+            actor_name=system.name,
+            step_name="Processing Failed",
+            action="Automated policy/fraud evaluation raised an unhandled error.",
+            notes=reason,
+            outcome="FAILED",
+        )
         return self._claims.refresh(claim)
 
     def _build_draft(
@@ -642,10 +689,22 @@ class ClaimService:
         ).scalar_one_or_none()
         return row
 
-    def _process(self, claim: Claim, *, actor: Actor) -> Claim:
-        """Submitted → Processing → routed. Evaluation and screening happen here."""
-        system = Actor.system()
+    def begin_processing(self, claim: Claim, *, actor: Actor) -> Claim:
+        """Submitted → Processing, on its own so a caller can commit it before the (slower, more
+        failure-prone) evaluation body runs.
 
+        Split out for :meth:`app.api.claims._run_claim_pipeline`: that background task commits this
+        transition alone first, so if the evaluation body then raises and its transaction is rolled
+        back, the claim is left at ``Processing`` — not ``Submitted`` — which is what makes
+        ``Processing -> Failed`` (the only legal edge into ``FAILED``) reachable from
+        :meth:`mark_claim_failed`. A no-op (returns immediately) if the claim is already
+        ``Processing``, so :meth:`_process`'s own call to this remains correct for every existing
+        synchronous caller (``submit_claim``, tests) that has never committed in between.
+        """
+        if claim.status == ClaimStatus.PROCESSING:
+            return claim
+
+        system = Actor.system()
         self._claims.transition_status(
             claim,
             ClaimStatus.PROCESSING,
@@ -655,6 +714,17 @@ class ClaimService:
             step_name="Processing",
             action="Started automated policy and fraud evaluation",
         )
+        return claim
+
+    def _process(self, claim: Claim, *, actor: Actor) -> Claim:
+        """Submitted → Processing → routed. Evaluation and screening happen here."""
+        system = Actor.system()
+        self.begin_processing(claim, actor=actor)
+
+        # TEMPORARY dev-only hook to manually test the Failed status path — remove before merging.
+        # Submit a claim with "FORCE_FAIL" anywhere in its title to make this raise on purpose.
+        if claim.title and "FORCE_FAIL" in claim.title:
+            raise RuntimeError("Forced failure for manual Failed-status testing.")
 
         # One effective-dated ruleset for the whole claim, chosen by the earliest item date.
         # Fetching per item would mean two lines of one report judged under different rule

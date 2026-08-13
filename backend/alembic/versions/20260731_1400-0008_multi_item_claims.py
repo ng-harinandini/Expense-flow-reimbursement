@@ -19,7 +19,7 @@ the per-expense claim columns are dropped without a backfill and ``downgrade()``
 nullable — the values themselves are unrecoverable, the same asymmetry ``0005_drop_departments``
 already accepts.
 
-The ``claim_status`` enum is deliberately **untouched**: ``Draft`` and ``Processing_AI`` remain, so
+The ``claim_status`` enum is deliberately **untouched**: ``Draft`` and ``Processing`` remain, so
 the ``claims_status_transition_guard`` trigger, ``app.domain.claim_state_machine``, and the
 frontend's status vocabulary all keep working unchanged.
 

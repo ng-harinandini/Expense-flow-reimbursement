@@ -91,7 +91,10 @@ export default function SubmitExpense() {
         return;
       }
 
-      toast({ message: "Claim raised successfully.", type: "success" });
+      toast({
+        message: "Claim submitted. It's being processed — check My Claims for status updates.",
+        type: "success",
+      });
       claimForm.reset();
       setItems([]);
       router.push("/my-claims");
