@@ -167,6 +167,9 @@ class Claim(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base):
     decision_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     withdrawal_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # System-authored, not human-authored (unlike the three columns above): a roll-up of every
+    # held item's own hold_reason, written by ClaimService._process. NULL once nothing is held.
+    hold_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     reimbursement_reference: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
 
     # --- provenance ---

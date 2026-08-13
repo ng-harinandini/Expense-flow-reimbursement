@@ -146,6 +146,9 @@ def item_to_dict(item: ExpenseItem) -> dict[str, Any]:
         # evaluate_travel_policy and doc/travel-policy-rules.md. ``None`` when no local-travel
         # rule ever applied to this item (most non-travel categories).
         "travelPolicyValidation": item.travel_policy_validation,
+        # System-authored explanation of why this item is on Policy_Hold/Fraud_Flag — see
+        # ClaimService._build_hold_reason. NULL for an item that was never held.
+        "holdReason": item.hold_reason,
         "fraudScreening": (
             {
                 "riskScore": item.fraud_risk_score,
@@ -284,6 +287,9 @@ def claim_to_dict(claim: Claim, *, include_internal_comments: bool = True) -> di
         "decisionNotes": claim.decision_notes,
         "rejectionReason": claim.rejection_reason,
         "withdrawalReason": claim.withdrawal_reason,
+        # System-authored roll-up across every held item — see ClaimService._process. NULL once
+        # nothing on the claim is held.
+        "holdReason": claim.hold_reason,
         "reimbursementReference": claim.reimbursement_reference,
         "approvedAt": _iso(claim.approved_at),
         "rejectedAt": _iso(claim.rejected_at),

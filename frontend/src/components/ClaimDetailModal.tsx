@@ -44,6 +44,12 @@ export const ClaimDetailModal: React.FC<ClaimDetailModalProps> = ({
             <p className="text-xs text-slate-400 mt-1">
               Submitted by <strong className="text-slate-200">{claim.employeeName}</strong> (Grade {claim.employeeGrade} • {claim.department}) on {claim.submissionDate}
             </p>
+            {claim.holdReason && (
+              <div className="mt-2 flex items-start gap-1.5 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-1.5 max-w-xl">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>{claim.holdReason}</span>
+              </div>
+            )}
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">
             <X className="w-5 h-5" />

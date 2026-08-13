@@ -5,6 +5,38 @@ records the design decided for enforcing a first slice of
 `backend/assets/Rules_Consolidated.xlsx` ("Reimbursement Rules", 38 rows) against submitted
 claims, and why the scope is narrower than the full sheet.
 
+## hold_reason — a plain-text explanation of why an item/claim is held
+
+Follow-up addition: neither `expense_items` nor `claims` had any single plain-text field
+explaining *why* an item landed on `Policy_Hold`/`Fraud_Flag` — only nested JSON
+(`policy_validation`/`travel_policy_validation`.reasoningSummary, `fraud_flags`) that a client has
+to know to dig into, and the one frontend component that tried to show it
+(`ClaimDetailModal.tsx`) read a claim-level `policyValidation` key that hasn't existed since the
+multi-item refactor (see below).
+
+Migration `0017_hold_reason_columns` adds `hold_reason` (nullable `Text`) to both tables:
+
+- `expense_items.hold_reason` — set by `ClaimService._build_hold_reason` (new static method,
+  `app/services/claim_service.py`) immediately after `_route_item` decides the item's status.
+  Mirrors `_route_item`'s own precedence exactly (fraud rationale for `FRAUD_FLAG`; otherwise
+  whichever of policy/travel-policy/classification actually failed or asked for review, joined
+  into one sentence), so the message never cites a reason that did not actually drive the
+  decision. `None` for a clean `AUTO_APPROVED` item.
+- `claims.hold_reason` — a roll-up across every held item (`"Item #2 (Meals): <reason> | Item #3
+  (...): <reason>"`), built once per claim in `ClaimService._process` right after the per-item
+  loop. `None` once nothing on the claim is held.
+
+Exposed on the wire as `holdReason` on both the item and claim shapes
+(`app/services/mappers.py::item_to_dict`/`claim_to_dict`).
+
+**Frontend**: `ExpenseClaim.holdReason?: string | null` added to `frontend/src/types.ts`;
+`ClaimDetailModal.tsx` renders it as an amber banner directly under the status badge in the modal
+header, visible regardless of the deeper legacy-shape mismatch described next. Deliberately scoped
+to just this one field — a bigger, separate mismatch was found while investigating (`App.tsx`
+feeds `/api/claims`'s real multi-item response straight into the legacy single-item `ExpenseClaim`
+type with no adapter, so most other flat claim-level fields in that modal likely read `undefined`
+against real data today); fixing that is out of scope here and left for a separate task.
+
 ## Verification
 
 - `alembic upgrade head` applied `0016_claim_policy_rules` cleanly against the real (AWS RDS,
@@ -39,6 +71,16 @@ claims, and why the scope is narrower than the full sheet.
     upgrade head` (tunnel-aware) applied cleanly, and the table/columns/seed rows were confirmed
     by direct query as above. The downgrade path (`op.drop_column`/`op.drop_table`/enum drops) was
     reviewed by inspection but not executed end-to-end, for the same environment reason.
+- `0017_hold_reason_columns`: `alembic upgrade head` applied cleanly on top of `0016` against the
+  same live dev database; `hold_reason` confirmed present on both `expense_items` and `claims` by
+  direct query. `test_revision_graph_is_complete_and_joined` updated again and passes. All touched
+  files (`claim.py`, `expense_item.py`, `claim_service.py`, `mappers.py`, the migration) pass
+  `python -m py_compile`; the app still imports and boots. Isolated `pytest` runs of
+  `test_claim_service_lifecycle.py` consistently skipped the DB-fixture tests in this session (the
+  same connection-timeout pattern as above, worse when a file is run in isolation rather than
+  inside the full suite where the tunnel is already warm) — a full-suite re-run to get a live
+  regression signal on `_build_hold_reason`/`_route_item` specifically was not completed in this
+  session; do that before calling this addition fully regression-tested.
 
 ## Source data and why the scope is narrow
 

@@ -659,11 +659,24 @@ class ClaimService:
             item.status = self._route_item(
                 policy_report, fraud_report, classification_report, travel_policy_report
             )
+            item.hold_reason = self._build_hold_reason(
+                item.status, policy_report, fraud_report, classification_report, travel_policy_report
+            )
             policy_reports.append(policy_report)
             fraud_reports.append(fraud_report)
             corpus.append(engine_input)
 
         self._record_claim_fraud_result(claim, fraud_reports)
+
+        held_items = [item for item in claim.items if item.hold_reason]
+        claim.hold_reason = (
+            " | ".join(
+                f"Item #{item.line_number} ({item.category}): {item.hold_reason}"
+                for item in held_items
+            )
+            if held_items
+            else None
+        )
 
         target = self._roll_up_status(claim)
         held = [i.line_number for i in claim.items if i.status != ExpenseItemStatus.AUTO_APPROVED]
@@ -954,6 +967,46 @@ class ClaimService:
         if classification_report and classification_report.get("categoryReviewRequired"):
             return ExpenseItemStatus.POLICY_HOLD
         return ExpenseItemStatus.AUTO_APPROVED
+
+    @staticmethod
+    def _build_hold_reason(
+        status: ExpenseItemStatus,
+        policy_report: dict[str, Any],
+        fraud_report: dict[str, Any],
+        classification_report: Optional[dict[str, Any]],
+        travel_policy_report: Optional[dict[str, Any]],
+    ) -> Optional[str]:
+        """One human-readable sentence explaining why an item landed where it did.
+
+        ``None`` for a clean ``AUTO_APPROVED`` item — there is nothing to explain. Mirrors
+        ``_route_item``'s own precedence exactly, so this never cites a reason that did not
+        actually drive the routing decision (e.g. a policy violation on an item that was actually
+        held for fraud, not policy).
+        """
+        if status == ExpenseItemStatus.FRAUD_FLAG:
+            return fraud_report.get("rationale") or "Flagged for fraud review."
+
+        if status != ExpenseItemStatus.POLICY_HOLD:
+            return None
+
+        reasons: list[str] = []
+        if not policy_report.get("overallPassed") or policy_report.get("requiresManualReview"):
+            summary = policy_report.get("reasoningSummary")
+            if summary:
+                reasons.append(summary)
+        if travel_policy_report and (
+            not travel_policy_report.get("overallPassed")
+            or travel_policy_report.get("requiresManualReview")
+        ):
+            summary = travel_policy_report.get("reasoningSummary")
+            if summary:
+                reasons.append(summary)
+        if classification_report and classification_report.get("categoryReviewRequired"):
+            reasons.append(
+                classification_report.get("notes")
+                or "AI category classification requires manual review."
+            )
+        return " ".join(reasons) if reasons else "Held for manual review."
 
     @staticmethod
     def _roll_up_status(claim: Claim) -> ClaimStatus:

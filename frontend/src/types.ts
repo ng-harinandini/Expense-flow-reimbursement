@@ -208,8 +208,11 @@ export interface ExpenseClaim {
   
   policyValidation?: PolicyValidationReport;
   fraudScreening?: FraudScreeningReport;
-  
+
   status: ClaimStatus;
+  /** System-authored explanation of why this claim is on Policy_Hold/Flagged_Fraud, rolled up
+   * across its held items. Absent/undefined when nothing is held. */
+  holdReason?: string | null;
   workflowHistory: WorkflowStepLog[];
   comments: ClaimComment[];
 }
