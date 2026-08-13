@@ -171,3 +171,29 @@ export function formatDdMmYyyy(isoDate: string) {
   const [, year, month, day] = match;
   return `${day}/${month}/${year}`;
 }
+
+/** `isoDate` shifted forward by `days` days, still in `YYYY-MM-DD` form. */
+function addDays(isoDate: string, days: number): string {
+  const date = new Date(`${isoDate}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Expense items whose date span — `invoiceDate` through `invoiceDate + numberOfDays - 1` —
+ * isn't fully contained within the claim's `fromDate`..`toDate` window. String comparison is
+ * enough here since both sides stay in `YYYY-MM-DD` form, which sorts identically to the dates
+ * it represents.
+ */
+export function findItemsOutsideClaimDuration(
+  items: ExpenseItemDraft[],
+  fromDate: string,
+  toDate: string
+): ExpenseItemDraft[] {
+  if (!fromDate || !toDate) return [];
+  return items.filter((item) => {
+    if (!item.invoiceDate) return false;
+    const itemEndDate = addDays(item.invoiceDate, (item.numberOfDays || 1) - 1);
+    return item.invoiceDate < fromDate || itemEndDate > toDate;
+  });
+}

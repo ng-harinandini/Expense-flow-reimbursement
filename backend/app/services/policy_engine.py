@@ -442,6 +442,20 @@ def _travel_rule_matches(
     )
 
 
+_SCOPE_AXES: tuple[str, ...] = ("category", "travelType", "gradeBand", "duration")
+
+
+def _is_full_wildcard(rule: Dict[str, Any]) -> bool:
+    """True when every scope axis is ``None`` — a pure catch-all, not a specific rule.
+
+    Used to give a global fallback (e.g. "anything with no matching rule is prohibited") lower
+    precedence than any rule that actually targets a category/travel-type/etc. Without this, a
+    single all-wildcard row would apply to every item unconditionally and override every
+    category-specific rule rather than only filling the gap where none exists.
+    """
+    return all(rule.get(axis) is None for axis in _SCOPE_AXES)
+
+
 def evaluate_travel_policy(
     items: Sequence[Dict[str, Any]],
     rules: Optional[Sequence[Dict[str, Any]]] = None,
@@ -481,6 +495,10 @@ def evaluate_travel_policy(
                 duration=duration,
             )
         ]
+
+        # A full-wildcard rule only takes effect as a fallback, once no specific rule matched.
+        specific_matches = [rule for rule in matches if not _is_full_wildcard(rule)]
+        matches = specific_matches or matches
 
         if not matches:
             reports.append({
