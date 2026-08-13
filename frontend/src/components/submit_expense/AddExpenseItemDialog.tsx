@@ -7,8 +7,8 @@ import {
   AlertTriangle,
   Calendar,
   CalendarDays,
-  DollarSign,
   Hash,
+  Landmark,
   Plane,
   Route,
   Store,
@@ -241,8 +241,8 @@ export function AddExpenseItemDialog({
         </DialogHeader>
 
         <form onSubmit={handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[35fr_65fr] lg:grid-rows-1">
-            <div className="flex flex-col gap-3 self-start">
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[minmax(0,35fr)_minmax(0,65fr)] lg:grid-rows-1">
+            <div className="flex min-w-0 flex-col gap-3 self-start">
               {extractionError && (
                 <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-700 dark:text-amber-400">
                   <AlertTriangle className="mt-px size-3.5 shrink-0" />
@@ -291,7 +291,7 @@ export function AddExpenseItemDialog({
                     Total Amount <span className="text-destructive">*</span>
                   </Label>
                   <div className="relative">
-                    <DollarSign className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Landmark className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       id="amount"
                       type="number"

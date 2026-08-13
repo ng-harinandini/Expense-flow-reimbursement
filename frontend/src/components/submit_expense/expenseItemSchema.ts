@@ -41,7 +41,11 @@ export const EXPENSE_ITEM_FORM_DEFAULTS: ExpenseItemFormValues = {
   merchantVendor: "",
   invoiceNumber: "",
   travelRoute: "",
-  travelType: "",
+  // Most submitted expenses are local; the local-travel policy engine (doc/travel-policy-rules.md)
+  // only ever evaluates an item when travelType is set, so an unset default silently opts every
+  // item out of the check the employee has no reason to know exists. Still a plain dropdown the
+  // employee can change to Domestic/International.
+  travelType: "Local",
   numberOfAttendees: 1,
   description: "",
 };
