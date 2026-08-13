@@ -25,7 +25,11 @@ import {
   claimSchema,
   type ClaimFormValues,
 } from "@/components/submit_expense/claimSchema";
-import type { ExpenseItemDraft } from "@/components/submit_expense/helpers";
+import {
+  findItemsOutsideClaimDuration,
+  formatDdMmYyyy,
+  type ExpenseItemDraft,
+} from "@/components/submit_expense/helpers";
 
 export default function SubmitExpense() {
   const router = useRouter();
@@ -77,6 +81,17 @@ export default function SubmitExpense() {
       return;
     }
 
+    const { fromDate, toDate } = getValues();
+    const outOfRangeItems = findItemsOutsideClaimDuration(items, fromDate, toDate);
+    if (outOfRangeItems.length > 0) {
+      const vendors = outOfRangeItems.map((item) => item.merchantVendor || item.category).join(", ");
+      toast({
+        message: `${outOfRangeItems.length} expense item${outOfRangeItems.length > 1 ? "s" : ""} (${vendors}) fall outside the claim's duration (${formatDdMmYyyy(fromDate)} – ${formatDdMmYyyy(toDate)}). Adjust the item date or the claim duration.`,
+        type: "error",
+      });
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
@@ -91,7 +106,10 @@ export default function SubmitExpense() {
         return;
       }
 
-      toast({ message: "Claim raised successfully.", type: "success" });
+      toast({
+        message: "Claim submitted. It's being processed — check My Claims for status updates.",
+        type: "success",
+      });
       claimForm.reset();
       setItems([]);
       router.push("/my-claims");

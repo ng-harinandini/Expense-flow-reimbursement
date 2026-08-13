@@ -46,7 +46,7 @@ function getStatusReason(claim: Claim): string {
   const reasons: Record<ClaimStatus, string> = {
     Draft: `This claim hasn't been submitted yet — ${itemLabel} totalling ${total} so far.`,
     Submitted: `${itemLabel} totalling ${total} have been received and are queued for AI scanning.`,
-    Processing_AI: `${itemLabel} totalling ${total} are being scanned for receipt data and policy compliance.`,
+    Processing: `${itemLabel} totalling ${total} are being scanned for receipt data and policy compliance.`,
     Auto_Approved: `${itemLabel} totalling ${total} passed policy checks within auto-approval limits, so no manual review was needed.`,
     Manager_Review: `${itemLabel} totalling ${total} need manager sign-off before this moves to finance.`,
     Finance_Review: `The manager approved ${itemLabel} totalling ${total}; finance is giving it a final review.`,
@@ -55,6 +55,7 @@ function getStatusReason(claim: Claim): string {
     Disbursed: `${itemLabel} totalling ${total} were approved and paid out.`,
     Flagged_Fraud: `${itemLabel} totalling ${total} were flagged during fraud screening and are under investigation.`,
     Withdrawn: `This claim was withdrawn, so ${itemLabel} totalling ${total} are no longer under review.`,
+    Failed: `Automated processing hit an error for ${itemLabel} totalling ${total} — see the reason below.`,
   };
 
   return reasons[claim.status];

@@ -32,6 +32,7 @@ const STATUS_OPTIONS: ClaimStatus[] = [
   "Flagged_Fraud",
   "Approved",
   "Withdrawn",
+  "Failed",
 ];
 
 const ALL_STATUSES = "all-statuses";

@@ -23,15 +23,18 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Body, Depends, Query, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Query, status
 
+from app.core.database import get_session_factory
 from app.core.deps import (
     CurrentUser,
+    build_claim_service,
     get_actor,
     get_claim_service,
     get_unit_of_work,
     require_roles,
 )
+from app.core.logging import get_logger
 from app.core.unit_of_work import UnitOfWork
 from app.domain.actor import Actor
 from app.schemas.schemas import (
@@ -46,6 +49,8 @@ from app.schemas.schemas import (
 )
 from app.services.claim_service import ClaimService
 from app.services.mappers import claim_to_dict
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/claims", tags=["Claims"])
 
@@ -148,21 +153,83 @@ def get_claim_history(
     ]
 
 
+def _run_claim_pipeline(claim_id: Any, actor: Actor) -> None:
+    """Background task: Submitted → Processing → routed, in its own session/transaction.
+
+    Runs after ``POST /claims`` has already responded, so it cannot reuse the request's session
+    (closed by then) — it opens a fresh one via the same ``sessionmaker`` used elsewhere for
+    out-of-request DB access. On any unhandled exception the claim is routed to ``Failed`` (with
+    ``hold_reason`` set to a short message) in a second, fresh transaction, so a pipeline bug never
+    leaves a claim stuck in ``Processing`` forever — see ``ClaimStatus.FAILED`` /
+    ``ClaimService.mark_claim_failed``.
+    """
+    session_factory = get_session_factory()
+    session = session_factory()
+    try:
+        service = build_claim_service(session)
+        claim = service.get_claim_for_actor(str(claim_id), actor=actor)
+        # Committed on its own, before the evaluation body: if that body then raises and its
+        # transaction rolls back, the claim is left at `Processing` (not `Submitted`), which is the
+        # only state `mark_claim_failed`'s `Processing -> Failed` edge can move it from.
+        service.begin_processing(claim, actor=actor)
+        session.commit()
+
+        service.process_submitted_claim(claim, actor=actor)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        logger.error(
+            "claim.pipeline.failed",
+            extra={"claimId": str(claim_id)},
+            exc_info=True,
+        )
+        try:
+            failure_session = session_factory()
+            try:
+                failure_service = build_claim_service(failure_session)
+                failed_claim = failure_service.get_claim_for_actor(str(claim_id), actor=actor)
+                failure_service.mark_claim_failed(
+                    failed_claim,
+                    actor=actor,
+                    reason=f"Automated processing failed: {exc}"[:500],
+                )
+                failure_session.commit()
+            finally:
+                failure_session.close()
+        except Exception:
+            logger.error(
+                "claim.pipeline.failed_status_write_failed",
+                extra={"claimId": str(claim_id)},
+                exc_info=True,
+            )
+    finally:
+        session.close()
+
+
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=dict)
 def create_claim(
     payload: ExpenseClaimCreateSchema,
+    background_tasks: BackgroundTasks,
     current: CurrentUser = Depends(require_roles("employee")),
     service: ClaimService = Depends(get_claim_service),
     uow: UnitOfWork = Depends(get_unit_of_work),
 ):
     """Create and submit a claim.
 
-    Runs the full pipeline (Draft → Submitted → Processing → routed) in one transaction. The owner
-    is the authenticated employee; any ``employeeId`` in the body is ignored.
+    Writes Draft → Submitted in this request's transaction and responds immediately with that
+    status; the AI pipeline (Processing → routed) then runs as a background task in its own
+    session, so the caller no longer waits out the ~20s of policy/fraud/classification calls. The
+    owner is the authenticated employee; any ``employeeId`` in the body is ignored.
+
+    Poll ``GET /claims/{id}`` for the terminal status (``Auto_Approved``/``Manager_Review``/
+    ``Finance_Review``/``Flagged_Fraud``), or ``Failed`` if the pipeline raised.
     """
     actor = Actor.from_current_user(current)
-    claim = service.submit_claim(payload.model_dump(exclude_none=False), actor=actor)
+    claim, actor = service.create_and_submit_claim(
+        payload.model_dump(exclude_none=False), actor=actor
+    )
     uow.commit()
+    background_tasks.add_task(_run_claim_pipeline, claim.id, actor)
     return _serialize(claim, actor)
 
 

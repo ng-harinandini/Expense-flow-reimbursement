@@ -17,6 +17,12 @@ Canonical lifecycle (spec vocabulary on the left, this module's members on the r
     Withdrawn        WITHDRAWN           (terminal) — the owner's own act, reachable from any
                                          pre-approval state except FLAGGED_FRAUD
 
+    Failed           FAILED              (terminal) — the background processing pipeline (policy
+                                         evaluation, fraud screening, classification) raised an
+                                         unhandled exception; reachable only from PROCESSING and
+                                         only by SYSTEM_ROLE. ``claims.hold_reason`` carries a
+                                         short, safe error message for the owner to read.
+
 ``REIMBURSED`` (wire value ``"Disbursed"``) is a **retired** member, kept only so historical rows
 already paid out before this revision still deserialize and classify correctly (it remains in
 ``TERMINAL_STATUSES``/``APPROVED_STATUSES``). No transition in :data:`ALLOWED_TRANSITIONS` still
@@ -60,6 +66,7 @@ ALLOWED_TRANSITIONS: dict[ClaimStatus, frozenset[ClaimStatus]] = {
             ClaimStatus.FINANCE_REVIEW,
             ClaimStatus.FLAGGED_FRAUD,
             ClaimStatus.WITHDRAWN,
+            ClaimStatus.FAILED,
         }
     ),
     # An auto-approved claim may still be confirmed by a human approver, or pulled back for review.
@@ -106,6 +113,7 @@ ALLOWED_TRANSITIONS: dict[ClaimStatus, frozenset[ClaimStatus]] = {
     ClaimStatus.REJECTED: frozenset(),
     ClaimStatus.REIMBURSED: frozenset(),
     ClaimStatus.WITHDRAWN: frozenset(),
+    ClaimStatus.FAILED: frozenset(),
 }
 
 #: States from which nothing may move. Money has left, or the claim is closed.
@@ -125,6 +133,7 @@ ROLES_BY_TARGET: dict[ClaimStatus, frozenset[str]] = {
     ClaimStatus.REIMBURSED: frozenset({"finance", "admin"}),
     ClaimStatus.FLAGGED_FRAUD: frozenset({SYSTEM_ROLE, "manager", "finance", "admin", "auditor"}),
     ClaimStatus.WITHDRAWN: frozenset({"employee", "admin"}),
+    ClaimStatus.FAILED: frozenset({SYSTEM_ROLE}),
 }
 
 #: Target status -> the ``Claim`` timestamp column stamped when it is reached.

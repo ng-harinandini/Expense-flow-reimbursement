@@ -7,7 +7,7 @@ the canonical Phase 1 lifecycle vocabulary. Where the two differ, the mapping is
 
     canonical (spec)   member name         wire value / DB value
     ----------------   -----------------   ---------------------
-    Processing         PROCESSING          "Processing_AI"
+    Processing         PROCESSING          "Processing"
     Pending Review     MANAGER_REVIEW      "Manager_Review"
     Pending Review     FINANCE_REVIEW      "Finance_Review"
     Reimbursed         REIMBURSED          "Disbursed"
@@ -70,7 +70,7 @@ class ClaimStatus(_WireEnum):
 
     DRAFT = "Draft"
     SUBMITTED = "Submitted"
-    PROCESSING = "Processing_AI"
+    PROCESSING = "Processing"
     AUTO_APPROVED = "Auto_Approved"
     MANAGER_REVIEW = "Manager_Review"
     FINANCE_REVIEW = "Finance_Review"
@@ -79,11 +79,12 @@ class ClaimStatus(_WireEnum):
     REIMBURSED = "Disbursed"
     FLAGGED_FRAUD = "Flagged_Fraud"
     WITHDRAWN = "Withdrawn"
+    FAILED = "Failed"
 
 
 # Canonical spec spellings accepted as input (normalized: upper + underscores).
 ClaimStatus._aliases = {  # type: ignore[attr-defined]
-    "PROCESSING_AI": ClaimStatus.PROCESSING.value,
+    "Processing": ClaimStatus.PROCESSING.value,
     "PENDING_REVIEW": ClaimStatus.MANAGER_REVIEW.value,
     "DISBURSED": ClaimStatus.REIMBURSED.value,
     "REIMBURSED": ClaimStatus.REIMBURSED.value,
@@ -123,6 +124,39 @@ class EmployeeGrade(_WireEnum):
     L5 = "L5"
     DIRECTOR = "Director"
     VP = "VP"
+
+
+class TravelType(_WireEnum):
+    """Scope of a claim's underlying travel; drives ``ClaimPolicyRule`` matching."""
+
+    LOCAL = "Local"
+    DOMESTIC = "Domestic"
+    INTERNATIONAL = "International"
+
+
+class ExpenseDuration(_WireEnum):
+    """The period a ``ClaimPolicyRule`` amount is denominated over. Mirrors the "Duration" column
+    of the source policy spreadsheet verbatim."""
+
+    DAY = "Day"
+    MONTH = "Month"
+
+
+class GradeBand(_WireEnum):
+    """Band 1 (most senior) through Band 4 (least senior). Maps from :class:`EmployeeGrade` via a
+    fixed lookup — see ``app.services.policy_engine.GRADE_TO_BAND`` — not stored per employee."""
+
+    BAND_1 = "Band 1"
+    BAND_2 = "Band 2"
+    BAND_3 = "Band 3"
+    BAND_4 = "Band 4"
+
+
+class ClaimPolicyRuleType(_WireEnum):
+    """What kind of check a ``ClaimPolicyRule`` row performs."""
+
+    AMOUNT_CAP = "AMOUNT_CAP"
+    PROHIBITED = "PROHIBITED"
 
 
 class FraudRiskLevel(_WireEnum):
@@ -238,6 +272,10 @@ ATTACHMENT_KIND_ENUM_NAME = "attachment_kind"
 APPROVAL_WORKFLOW_STATUS_ENUM_NAME = "approval_workflow_status"
 APPROVAL_STEP_STATUS_ENUM_NAME = "approval_step_status"
 AI_INFERENCE_STATUS_ENUM_NAME = "ai_inference_status"
+TRAVEL_TYPE_ENUM_NAME = "travel_type"
+EXPENSE_DURATION_ENUM_NAME = "expense_duration"
+GRADE_BAND_ENUM_NAME = "grade_band"
+CLAIM_POLICY_RULE_TYPE_ENUM_NAME = "claim_policy_rule_type"
 
 claim_status_enum = _pg_enum(ClaimStatus, CLAIM_STATUS_ENUM_NAME)
 expense_item_status_enum = _pg_enum(ExpenseItemStatus, EXPENSE_ITEM_STATUS_ENUM_NAME)
@@ -249,6 +287,10 @@ approval_workflow_status_enum = _pg_enum(
 )
 approval_step_status_enum = _pg_enum(ApprovalStepStatus, APPROVAL_STEP_STATUS_ENUM_NAME)
 ai_inference_status_enum = _pg_enum(AIInferenceStatus, AI_INFERENCE_STATUS_ENUM_NAME)
+travel_type_enum = _pg_enum(TravelType, TRAVEL_TYPE_ENUM_NAME)
+expense_duration_enum = _pg_enum(ExpenseDuration, EXPENSE_DURATION_ENUM_NAME)
+grade_band_enum = _pg_enum(GradeBand, GRADE_BAND_ENUM_NAME)
+claim_policy_rule_type_enum = _pg_enum(ClaimPolicyRuleType, CLAIM_POLICY_RULE_TYPE_ENUM_NAME)
 
 
 def status_value(status: "ClaimStatus | str | None") -> Optional[str]:

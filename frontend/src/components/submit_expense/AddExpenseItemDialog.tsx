@@ -6,12 +6,14 @@ import { yupResolver } from "@hookform/resolvers/yup";
 import {
   AlertTriangle,
   Calendar,
-  CreditCard,
-  DollarSign,
-  Percent,
-  Sparkles,
+  CalendarDays,
+  Hash,
+  Landmark,
+  Plane,
+  Route,
   Store,
   Tag,
+  Users,
 } from "lucide-react";
 
 import { useCategoriesQuery } from "@/api/categories";
@@ -31,7 +33,6 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/Label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/Button";
 import { ReceiptDropzone } from "@/components/submit_expense/ReceiptDropzone";
 import {
@@ -40,9 +41,11 @@ import {
   type ExpenseItemFormValues,
 } from "@/components/submit_expense/expenseItemSchema";
 import {
+  CURRENCY_CODES,
   EXPENSE_CATEGORIES,
   generateItemId,
   readFileAsDataUrl,
+  TRAVEL_TYPES,
   type ExpenseItemDraft,
 } from "@/components/submit_expense/helpers";
 
@@ -67,7 +70,6 @@ export function AddExpenseItemDialog({
 
   const [receipt, setReceipt] = React.useState<File | null>(null);
   const [isExtracting, setIsExtracting] = React.useState(false);
-  const [isExtracted, setIsExtracted] = React.useState(false);
   const [extraction, setExtraction] = React.useState<ReceiptExtraction | null>(null);
   const [extractionError, setExtractionError] = React.useState<string | null>(null);
 
@@ -80,8 +82,6 @@ export function AddExpenseItemDialog({
     register,
     handleSubmit,
     reset,
-    setValue,
-    watch,
     formState: { errors, isSubmitting },
   } = useForm<ExpenseItemFormValues>({
     resolver: yupResolver(expenseItemSchema),
@@ -119,7 +119,6 @@ export function AddExpenseItemDialog({
       reset(values);
       setReceipt(receiptFile);
       setIsExtracting(false);
-      setIsExtracted(true);
       // Carried over so re-confirming an edited item keeps the provenance the
       // submit call needs; the receipt is not re-uploaded just to edit a field.
       setExtraction(savedExtraction);
@@ -128,7 +127,6 @@ export function AddExpenseItemDialog({
       reset(EXPENSE_ITEM_FORM_DEFAULTS);
       setReceipt(null);
       setIsExtracting(false);
-      setIsExtracted(false);
       setExtraction(null);
       setExtractionError(null);
     }
@@ -137,21 +135,12 @@ export function AddExpenseItemDialog({
   const fieldsEnabled = Boolean(receipt) && !isExtracting;
   const isPdf = receipt?.type === "application/pdf";
 
-  // Comparing against the live value rather than tracking "was prefilled" means the badge
-  // disappears the moment the user picks something else, and reappears on an edit-mode reopen if
-  // they kept the suggestion — the reopen path restores both the saved category and `extraction`.
-  const selectedCategory = watch("category");
-  const categoryWasSuggested =
-    Boolean(extraction?.suggestedCategory) &&
-    selectedCategory === extraction?.suggestedCategory;
-
   const handleFileAccepted = async (file: File) => {
     uploadRef.current?.abort();
     const controller = new AbortController();
     uploadRef.current = controller;
 
     setReceipt(file);
-    setIsExtracted(false);
     setExtraction(null);
     setExtractionError(null);
     setIsExtracting(true);
@@ -167,61 +156,57 @@ export function AddExpenseItemDialog({
       // A failed extraction still returns 200 with the stored file — the user
       // fills the fields in by hand rather than losing the upload.
       setExtractionError(result.errorMessage ?? null);
-      setIsExtracted(true);
     } catch (error) {
       if (controller.signal.aborted) return;
       setExtractionError(
         getErrorMessage(error, "Could not scan the receipt. Enter the details manually.")
       );
       // Fields are unlocked anyway so a scan failure never blocks the claim.
-      setIsExtracted(true);
     } finally {
       if (!controller.signal.aborted) setIsExtracting(false);
     }
   };
 
-  /** Writes the server's suggestions into the form as editable defaults. */
+  /** `yyyy-MM-dd` prefix of an ISO date string, or `""` if `value` isn't one. */
+  const asIsoDate = (value: string | undefined) => value?.slice(0, 10) ?? "";
+
+
+  const matchOption = (options: readonly string[], value: string | undefined) =>
+    options.find((option) => option.toLowerCase() === value?.toLowerCase());
+
+  /** Writes the server's suggestions into the form as editable defaults, in one `reset()` call. */
   const applyPrefill = (result: ReceiptExtraction) => {
-    if (result.suggestedVendor) {
-      setValue("merchantVendor", result.suggestedVendor, { shouldValidate: true });
-    }
-    if (result.suggestedDate) {
-      // The date input needs yyyy-MM-dd; anything else is left for the user.
-      const date = result.suggestedDate.slice(0, 10);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        setValue("expenseFromDate", date, { shouldValidate: true });
-        setValue("expenseToDate", date, { shouldValidate: true });
-      }
-    }
-    if (typeof result.suggestedAmount === "number") {
-      setValue("amount", result.suggestedAmount, { shouldValidate: true });
-    }
-    // Parse tax from extraction fields (e.g. { fieldType: "TAX", fieldValue: "$24.96" })
-    const fields = (result.extraction?.fields as Array<{ fieldType: string; fieldValue: string }> | undefined) ?? [];
-    const taxField = fields.find((f) => f.fieldType === "TAX");
-    if (taxField) {
-      const taxValue = parseFloat(taxField.fieldValue.replace(/[^\d.]/g, ""));
-      if (!Number.isNaN(taxValue)) {
-        setValue("taxAmount", taxValue, { shouldValidate: true });
-      }
-    }
-    if (result.suggestedCategory) {
-      // Only ever set a value that has a matching <option>. A name with none renders the select
-      // blank while the form value is non-empty — and `category` is only `string().required()`, so
-      // validation would still pass and the user would submit a category they never saw. The
-      // dropdown and the server read the same category list, so a miss here means the list changed
-      // mid-session or the query hasn't landed and we're on the fallback.
-      const suggested = result.suggestedCategory.trim().toLowerCase();
-      const match = categoryOptions.find((option) => option.toLowerCase() === suggested);
-      if (match) setValue("category", match, { shouldValidate: true });
-    }
+    const fields = result.categoryFields ?? {};
+
+    const category = matchOption(categoryOptions, fields.expense_category ?? result.suggestedCategory ?? undefined);
+    const currency = matchOption(
+      CURRENCY_CODES,
+      (fields.currency ?? result.suggestedCurrency ?? undefined)?.toUpperCase()
+    );
+    const invoiceDate = asIsoDate(result.suggestedDate ?? undefined);
+
+    reset(
+      (current) => ({
+        ...current,
+        ...(category && { category }),
+        ...(currency && { currency }),
+        amount: fields.total_amount ?? result.suggestedAmount ?? current.amount,
+        ...(invoiceDate && { invoiceDate }),
+        merchantVendor: fields.vendor_name ?? result.suggestedVendor ?? current.merchantVendor,
+        invoiceNumber: fields.invoice_number ?? current.invoiceNumber,
+        travelRoute: fields.travel_route ?? current.travelRoute,
+        travelType: fields.travel_type ?? current.travelType,
+        numberOfAttendees: fields.number_of_attendees ?? current.numberOfAttendees,
+        // numberOfDays is deliberately never touched here — it is always a manual entry.
+      }),
+      { keepDefaultValues: true }
+    );
   };
 
   const handleFileRemoved = () => {
     uploadRef.current?.abort();
     setReceipt(null);
     setIsExtracting(false);
-    setIsExtracted(false);
     setExtraction(null);
     setExtractionError(null);
     reset(EXPENSE_ITEM_FORM_DEFAULTS);
@@ -246,7 +231,7 @@ export function AddExpenseItemDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-5xl">
+      <DialogContent className="flex max-h-[calc(100vh-4rem)] flex-col sm:max-w-5xl">
         <DialogHeader className="pr-8">
           <DialogTitle>{isEditing ? "Edit expense item" : "Add expense item"}</DialogTitle>
           <DialogDescription>
@@ -255,16 +240,9 @@ export function AddExpenseItemDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit(onSubmit)}>
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[35fr_65fr]">
-            <div className="flex flex-col gap-3">
-              {receipt && isExtracted && !extractionError && (
-                <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-primary">
-                  <Sparkles className="size-3.5 shrink-0" />
-                  Receipt scanned — review the auto-filled details before confirming.
-                </div>
-              )}
-
+        <form onSubmit={handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[minmax(0,35fr)_minmax(0,65fr)] lg:grid-rows-1">
+            <div className="flex min-w-0 flex-col gap-3 self-start">
               {extractionError && (
                 <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-700 dark:text-amber-400">
                   <AlertTriangle className="mt-px size-3.5 shrink-0" />
@@ -272,30 +250,94 @@ export function AddExpenseItemDialog({
                 </div>
               )}
 
-              {/* Advisory only — a repeat receipt is legitimate after a rejection,
-                  so this never blocks confirming the item. */}
-              {extraction?.duplicateOfClaimNumber && (
-                <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-700 dark:text-amber-400">
-                  <AlertTriangle className="mt-px size-3.5 shrink-0" />
-                  <span>
-                    This receipt was already uploaded on claim{" "}
-                    {extraction.duplicateOfClaimNumber}.
-                  </span>
-                </div>
-              )}
               <ReceiptDropzone
                 file={receipt}
                 onFileAccepted={handleFileAccepted}
                 onFileRemoved={handleFileRemoved}
                 isScanning={isExtracting}
-                className="flex-1"
               />
             </div>
 
-            <div className="space-y-5">
+            <div className="scrollbar-subtle min-h-0 space-y-5 overflow-y-auto px-1">
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="merchantVendor">Merchant / vendor</Label>
+                  <Label htmlFor="category">
+                    Expense Category <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Tag className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <select
+                      id="category"
+                      disabled={!fieldsEnabled}
+                      aria-invalid={!!errors.category}
+                      className={SELECT_CLASSES}
+                      {...register("category")}
+                    >
+                      <option value="">Select a category</option>
+                      {categoryOptions.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {errors.category && (
+                    <p className="text-xs text-destructive">{errors.category.message}</p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="amount">
+                    Total Amount <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Landmark className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="amount"
+                      type="number"
+                      step="0.01"
+                      disabled={!fieldsEnabled}
+                      placeholder="0.00"
+                      aria-invalid={!!errors.amount}
+                      className="pl-9"
+                      {...register("amount")}
+                    />
+                  </div>
+                  {errors.amount && (
+                    <p className="text-xs text-destructive">{errors.amount.message}</p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="currency">
+                    Currency <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Hash className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <select
+                      id="currency"
+                      disabled={!fieldsEnabled}
+                      aria-invalid={!!errors.currency}
+                      className={SELECT_CLASSES}
+                      {...register("currency")}
+                    >
+                      <option value="">Select a currency</option>
+                      {CURRENCY_CODES.map((code) => (
+                        <option key={code} value={code}>
+                          {code}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {errors.currency && (
+                    <p className="text-xs text-destructive">{errors.currency.message}</p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="merchantVendor">
+                    Vendor Name <span className="text-destructive">*</span>
+                  </Label>
                   <div className="relative">
                     <Store className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
@@ -315,142 +357,137 @@ export function AddExpenseItemDialog({
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="expenseFromDate">Expense from date</Label>
+                  <Label htmlFor="invoiceDate">
+                    Invoice Date <span className="text-destructive">*</span>
+                  </Label>
                   <div className="relative">
                     <Calendar className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
-                      id="expenseFromDate"
+                      id="invoiceDate"
                       type="date"
                       disabled={!fieldsEnabled}
-                      aria-invalid={!!errors.expenseFromDate}
+                      aria-invalid={!!errors.invoiceDate}
                       className="pl-9"
-                      {...register("expenseFromDate")}
+                      {...register("invoiceDate")}
                     />
                   </div>
-                  {errors.expenseFromDate && (
-                    <p className="text-xs text-destructive">
-                      {errors.expenseFromDate.message}
-                    </p>
+                  {errors.invoiceDate && (
+                    <p className="text-xs text-destructive">{errors.invoiceDate.message}</p>
                   )}
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="expenseToDate">Expense to date</Label>
+                  <Label htmlFor="numberOfDays">
+                    Number of Days <span className="text-destructive">*</span>
+                  </Label>
                   <div className="relative">
-                    <Calendar className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <CalendarDays className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
-                      id="expenseToDate"
-                      type="date"
+                      id="numberOfDays"
+                      type="number"
+                      step="1"
+                      min="1"
                       disabled={!fieldsEnabled}
-                      aria-invalid={!!errors.expenseToDate}
+                      placeholder="1"
+                      aria-invalid={!!errors.numberOfDays}
                       className="pl-9"
-                      {...register("expenseToDate")}
+                      {...register("numberOfDays")}
                     />
                   </div>
-                  {errors.expenseToDate && (
-                    <p className="text-xs text-destructive">
-                      {errors.expenseToDate.message}
-                    </p>
+                  {errors.numberOfDays && (
+                    <p className="text-xs text-destructive">{errors.numberOfDays.message}</p>
                   )}
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="category">Category</Label>
+                  <Label htmlFor="invoiceNumber">
+                    Invoice Number <span className="text-destructive">*</span>
+                  </Label>
                   <div className="relative">
-                    <Tag className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Hash className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="invoiceNumber"
+                      disabled={!fieldsEnabled}
+                      placeholder="e.g. INV-10293"
+                      aria-invalid={!!errors.invoiceNumber}
+                      className="pl-9"
+                      {...register("invoiceNumber")}
+                    />
+                  </div>
+                  {errors.invoiceNumber && (
+                    <p className="text-xs text-destructive">{errors.invoiceNumber.message}</p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="travelRoute">Travel Route (optional)</Label>
+                  <div className="relative">
+                    <Route className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="travelRoute"
+                      disabled={!fieldsEnabled}
+                      placeholder="e.g. Bengaluru - Mumbai"
+                      aria-invalid={!!errors.travelRoute}
+                      className="pl-9"
+                      {...register("travelRoute")}
+                    />
+                  </div>
+                  {errors.travelRoute && (
+                    <p className="text-xs text-destructive">{errors.travelRoute.message}</p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="travelType">Travel Type (optional)</Label>
+                  <div className="relative">
+                    <Plane className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                     <select
-                      id="category"
+                      id="travelType"
                       disabled={!fieldsEnabled}
-                      aria-invalid={!!errors.category}
+                      aria-invalid={!!errors.travelType}
                       className={SELECT_CLASSES}
-                      {...register("category")}
+                      {...register("travelType")}
                     >
-                      <option value="">Select a category</option>
-                      {categoryOptions.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
+                      <option value="">Select travel type</option>
+                      {TRAVEL_TYPES.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
                         </option>
                       ))}
                     </select>
                   </div>
-                  {errors.category ? (
-                    <p className="text-xs text-destructive">{errors.category.message}</p>
-                  ) : (
-                    categoryWasSuggested && (
-                      <p className="flex items-center gap-1.5 text-xs text-primary">
-                        <Sparkles className="size-3 shrink-0" />
-                        Read from the receipt
-                        {extraction?.suggestedCategoryConfidence != null &&
-                          ` (${Math.round(extraction.suggestedCategoryConfidence * 100)}% confident)`}
-                        {" — change it if it's wrong."}
-                      </p>
-                    )
+                  {errors.travelType && (
+                    <p className="text-xs text-destructive">{errors.travelType.message}</p>
                   )}
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="amount">Amount</Label>
+                  <Label htmlFor="numberOfAttendees">No. of Attendees (optional)</Label>
                   <div className="relative">
-                    <DollarSign className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Users className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
-                      id="amount"
+                      id="numberOfAttendees"
                       type="number"
-                      step="0.01"
+                      step="1"
                       disabled={!fieldsEnabled}
-                      placeholder="0.00"
-                      aria-invalid={!!errors.amount}
+                      placeholder="0"
+                      aria-invalid={!!errors.numberOfAttendees}
                       className="pl-9"
-                      {...register("amount")}
+                      {...register("numberOfAttendees")}
                     />
                   </div>
-                  {errors.amount && (
-                    <p className="text-xs text-destructive">{errors.amount.message}</p>
-                  )}
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="taxAmount">Tax / GST</Label>
-                  <div className="relative">
-                    <Percent className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      id="taxAmount"
-                      type="number"
-                      step="0.01"
-                      disabled={!fieldsEnabled}
-                      placeholder="0.00"
-                      aria-invalid={!!errors.taxAmount}
-                      className="pl-9"
-                      {...register("taxAmount")}
-                    />
-                  </div>
-                  {errors.taxAmount && (
-                    <p className="text-xs text-destructive">{errors.taxAmount.message}</p>
-                  )}
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="paymentMethod">Payment method</Label>
-                  <div className="relative">
-                    <CreditCard className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      id="paymentMethod"
-                      disabled={!fieldsEnabled}
-                      placeholder="e.g. Corporate card"
-                      aria-invalid={!!errors.paymentMethod}
-                      className="pl-9"
-                      {...register("paymentMethod")}
-                    />
-                  </div>
-                  {errors.paymentMethod && (
+                  {errors.numberOfAttendees && (
                     <p className="text-xs text-destructive">
-                      {errors.paymentMethod.message}
+                      {errors.numberOfAttendees.message}
                     </p>
                   )}
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="description">Business purpose &amp; description</Label>
+                <Label htmlFor="description">
+                  Business purpose &amp; description <span className="text-destructive">*</span>
+                </Label>
                 <Textarea
                   id="description"
                   rows={3}
@@ -466,9 +503,7 @@ export function AddExpenseItemDialog({
             </div>
           </div>
 
-          <Separator className="my-6" />
-
-          <DialogFooter>
+          <DialogFooter className="mt-6 shrink-0">
             <DialogClose asChild>
               <Button type="button" variant="outline">
                 Cancel

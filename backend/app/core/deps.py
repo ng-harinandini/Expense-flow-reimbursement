@@ -32,6 +32,7 @@ from app.ai.knowledge.service import KnowledgeService
 from app.ai.prompts.registry import PromptRegistry
 from app.ai.registry.flags import feature_flags
 from app.ai.services.composition import build_duplicate_detection_service, build_knowledge_service
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.logging import get_logger
 from app.core.security import TokenError, verify_access_token
@@ -43,6 +44,7 @@ from app.repositories.claim_repository import ClaimRepository
 from app.repositories.employee_repository import EmployeeRepository
 from app.repositories.fraud_repository import FraudResultRepository
 from app.repositories.category_repository import CategoryRepository
+from app.repositories.claim_policy_rule_repository import ClaimPolicyRuleRepository
 from app.repositories.policy_rule_repository import PolicyRuleRepository
 from app.repositories.role_repository import RoleRepository
 from app.repositories.workflow_repository import ApprovalWorkflowRepository
@@ -175,6 +177,12 @@ def get_role_repository(db: Session = Depends(get_db)) -> RoleRepository:
 
 def get_policy_rule_repository(db: Session = Depends(get_db)) -> PolicyRuleRepository:
     return PolicyRuleRepository(db)
+
+
+def get_claim_policy_rule_repository(
+    db: Session = Depends(get_db),
+) -> ClaimPolicyRuleRepository:
+    return ClaimPolicyRuleRepository(db)
 
 
 def get_category_repository(db: Session = Depends(get_db)) -> CategoryRepository:
@@ -323,6 +331,22 @@ def get_policy_rule_service(
     return PolicyRuleService(policy_rule_repository, audit_service)
 
 
+def get_optional_policy_rule_service(
+    policy_rule_service: PolicyRuleService = Depends(get_policy_rule_service),
+) -> Optional[PolicyRuleService]:
+    """``ClaimService``'s legacy category-policy-engine dependency, or ``None`` when
+    ``POLICY_RULES_ENGINE_ENABLED`` is off (the default).
+
+    Same reasoning as :func:`get_optional_decision_memory`: the flag is decided here, not inside
+    ``ClaimService``, so a disabled engine leaves the claim pipeline byte-identical to never having
+    called it. Does not affect the standalone `policy_rules` admin CRUD API, which depends on
+    :func:`get_policy_rule_service` directly rather than through ``ClaimService``.
+    """
+    if not settings.POLICY_RULES_ENGINE_ENABLED:
+        return None
+    return policy_rule_service
+
+
 def get_category_service(
     category_repository: CategoryRepository = Depends(get_category_repository),
     audit_service: AuditService = Depends(get_audit_service),
@@ -330,29 +354,53 @@ def get_category_service(
     return CategoryService(category_repository, audit_service)
 
 
-def get_claim_service(
-    claim_repository: ClaimRepository = Depends(get_claim_repository),
-    fraud_repository: FraudResultRepository = Depends(get_fraud_repository),
-    workflow_repository: ApprovalWorkflowRepository = Depends(get_workflow_repository),
-    employee_service: EmployeeService = Depends(get_employee_service),
-    policy_rule_service: PolicyRuleService = Depends(get_policy_rule_service),
-    audit_service: AuditService = Depends(get_audit_service),
-    decision_memory: Optional[KnowledgeService] = Depends(get_optional_decision_memory),
-    duplicate_detection: Optional[DuplicateDetectionService] = Depends(
-        get_optional_duplicate_detection
-    ),
-    document_classification: Optional[DocumentClassificationService] = Depends(
-        get_optional_document_classification
-    ),
-) -> ClaimService:
+def build_claim_service(db: Session) -> ClaimService:
+    """The full ``ClaimService`` object graph, bound to ``db``.
+
+    Factored out of :func:`get_claim_service` so the background task that runs a claim's AI
+    pipeline after ``POST /claims`` responds (see ``app.api.claims._run_claim_pipeline``) can build
+    the identical service graph over its own session, without going through FastAPI's request-scoped
+    ``Depends`` resolution (there is no request by the time it runs). Any change to how
+    ``ClaimService`` is wired belongs here so both call sites stay in sync.
+    """
+    audit_service = get_audit_service(get_audit_repository(db))
+    policy_rule_service = (
+        get_policy_rule_service(get_policy_rule_repository(db), audit_service)
+        if settings.POLICY_RULES_ENGINE_ENABLED
+        else None
+    )
+    knowledge_service = get_knowledge_service(db)
+    decision_memory = knowledge_service if feature_flags.is_enabled("ai.decision_memory") else None
+    duplicate_detection_service = get_duplicate_detection_service(db)
+    duplicate_detection = (
+        duplicate_detection_service
+        if feature_flags.is_enabled("ai.duplicate_detection")
+        else None
+    )
+    category_repository = get_category_repository(db)
+    ai_inference_repository = get_ai_inference_repository(db)
+    document_classification_service = get_document_classification_service(
+        category_repository, ai_inference_repository
+    )
+    document_classification = (
+        document_classification_service
+        if feature_flags.is_enabled("ai.category_classification")
+        else None
+    )
+
     return ClaimService(
-        claim_repository=claim_repository,
-        fraud_repository=fraud_repository,
-        workflow_repository=workflow_repository,
-        employee_service=employee_service,
+        claim_repository=get_claim_repository(db),
+        fraud_repository=get_fraud_repository(db),
+        workflow_repository=get_workflow_repository(db),
+        employee_service=get_employee_service(get_employee_repository(db), get_role_repository(db)),
         policy_rule_service=policy_rule_service,
         audit_service=audit_service,
         decision_memory=decision_memory,
         duplicate_detection=duplicate_detection,
         document_classification=document_classification,
+        claim_policy_rule_repository=get_claim_policy_rule_repository(db),
     )
+
+
+def get_claim_service(db: Session = Depends(get_db)) -> ClaimService:
+    return build_claim_service(db)

@@ -5,11 +5,9 @@ effective-dated**: publishing a change inserts a new row with ``version + 1`` an
 previous one, so a historical claim can always be explained by the rule text that was live on its
 submission date. Rows are never edited in place and never deleted.
 
-``conditions`` / ``actions`` are JSONB so later phases can express richer rules
+``conditions`` / ``actions`` are JSONB so rules can express richer checks
 (``{"amountUsd": {"gt": 500}}`` → ``{"route": "FINANCE_REVIEW"}``) without another migration.
-**Phase 1 stores them only** — no evaluation logic reads them yet; the existing category engine in
-``app/services/policy_engine.py`` continues to consume the typed columns. See
-``DECISIONS/ADR-004-phase1-durable-domain-model.md``.
+The policy engine consumes these payloads together with the typed columns.
 """
 
 from __future__ import annotations

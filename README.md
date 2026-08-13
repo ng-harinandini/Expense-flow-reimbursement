@@ -63,7 +63,7 @@ live when it was submitted.
 ### Claim lifecycle
 
 ```
-Draft → Submitted → Processing_AI ─┬→ Auto_Approved ──→ Disbursed
+Draft → Submitted → Processing ─┬→ Auto_Approved ──→ Disbursed
                                    ├→ Manager_Review → Finance_Review → Approved → Disbursed
                                    │                 ↘ Rejected
                                    └→ Flagged_Fraud  → (cleared back to review, or Rejected)

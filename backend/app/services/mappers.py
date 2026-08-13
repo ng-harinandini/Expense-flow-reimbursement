@@ -20,6 +20,7 @@ from typing import Any, Optional, Sequence
 from app.models.audit import AuditLog
 from app.models.category import ExpenseCategory
 from app.models.claim import Attachment, Claim, ClaimStatusHistory, Comment
+from app.models.claim_policy_rule import ClaimPolicyRule
 from app.models.expense_item import ExpenseItem
 from app.models.fraud import FraudResult
 from app.models.policy import PolicyRule
@@ -113,6 +114,8 @@ def item_to_dict(item: ExpenseItem) -> dict[str, Any]:
         "categoryId": str(item.category_id) if item.category_id else None,
         "category": item.category,
         "subCategory": item.sub_category,
+        "travelType": item.travel_type.value if item.travel_type else None,
+        "duration": item.duration.value if item.duration else None,
         "expenseDate": _iso_date(item.expense_date),
         "merchantVendor": item.merchant_vendor,
         "purposeDescription": item.purpose_description or "",
@@ -139,6 +142,13 @@ def item_to_dict(item: ExpenseItem) -> dict[str, Any]:
         "ocrConfidence": item.ocr_confidence,
         # --- verdicts ---
         "policyValidation": item.policy_validation,
+        # A separate report from ``policyValidation`` above — see app.services.policy_engine.
+        # evaluate_travel_policy and doc/travel-policy-rules.md. ``None`` when no local-travel
+        # rule ever applied to this item (most non-travel categories).
+        "travelPolicyValidation": item.travel_policy_validation,
+        # System-authored explanation of why this item is on Policy_Hold/Fraud_Flag — see
+        # ClaimService._build_hold_reason. NULL for an item that was never held.
+        "holdReason": item.hold_reason,
         "fraudScreening": (
             {
                 "riskScore": item.fraud_risk_score,
@@ -277,6 +287,9 @@ def claim_to_dict(claim: Claim, *, include_internal_comments: bool = True) -> di
         "decisionNotes": claim.decision_notes,
         "rejectionReason": claim.rejection_reason,
         "withdrawalReason": claim.withdrawal_reason,
+        # System-authored roll-up across every held item — see ClaimService._process. NULL once
+        # nothing on the claim is held.
+        "holdReason": claim.hold_reason,
         "reimbursementReference": claim.reimbursement_reference,
         "approvedAt": _iso(claim.approved_at),
         "rejectedAt": _iso(claim.rejected_at),
@@ -321,6 +334,8 @@ def item_to_engine_input(
         ),
         "category": item.category,
         "subCategory": item.sub_category,
+        "travelType": item.travel_type.value if item.travel_type else None,
+        "duration": item.duration.value if item.duration else None,
         "amount": _float(item.amount),
         "currency": item.currency,
         "amountUSD": _float(item.amount_usd),
@@ -374,7 +389,13 @@ def policy_rule_to_dict(rule: PolicyRule) -> dict[str, Any]:
         "category": rule.category,
         "maxAmountUSD": rule.limit_expression or _float(rule.expense_limit),
         "autoApproveLimitUSD": _float(rule.auto_approve_limit),
-        "receiptRequiredAboveUSD": _float(rule.receipt_required_above) or 0.0,
+        # Preserve NULL: a missing threshold means the policy does not require a receipt based on
+        # amount.  Converting NULL to zero made every custom rule silently require a receipt.
+        "receiptRequiredAboveUSD": (
+            _float(rule.receipt_required_above)
+            if rule.receipt_required_above is not None
+            else None
+        ),
         "requiresPreApproval": rule.requires_pre_approval,
         "gradeTier": rule.grade_tier or "All Staff",
         "specialRules": rule.special_rules or [],
@@ -402,6 +423,36 @@ def policy_rule_to_dict(rule: PolicyRule) -> dict[str, Any]:
 def policy_rules_to_engine_input(rules: Sequence[PolicyRule]) -> list[dict[str, Any]]:
     """Rules in the shape ``policy_engine.evaluate_expense_policy`` expects."""
     return [policy_rule_to_dict(rule) for rule in rules]
+
+
+def claim_policy_rule_to_dict(rule: ClaimPolicyRule) -> dict[str, Any]:
+    """One ``ClaimPolicyRule`` in the shape ``policy_engine.evaluate_travel_policy`` expects.
+
+    Each nullable scope field stays ``None`` on the wire (never coerced to ``"*"`` or similar) so
+    the engine's ``rule_value is None`` wildcard check works unchanged.
+    """
+    return {
+        "code": rule.code,
+        "version": rule.version,
+        "name": rule.name,
+        "description": rule.description,
+        "category": rule.category,
+        "travelType": rule.travel_type.value if rule.travel_type else None,
+        "gradeBand": rule.grade_band.value if rule.grade_band else None,
+        "duration": rule.duration.value if rule.duration else None,
+        "ruleType": rule.rule_type.value,
+        "amount": _float(rule.amount),
+        "currency": rule.currency,
+        "priority": rule.priority,
+        "isActive": rule.is_active,
+        "effectiveDate": _iso_date(rule.effective_date),
+        "expirationDate": _iso_date(rule.expiration_date),
+    }
+
+
+def claim_policy_rules_to_engine_input(rules: Sequence[ClaimPolicyRule]) -> list[dict[str, Any]]:
+    """Rules in the shape ``policy_engine.evaluate_travel_policy`` expects."""
+    return [claim_policy_rule_to_dict(rule) for rule in rules]
 
 
 # --- categories ----------------------------------------------------------------

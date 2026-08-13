@@ -4,9 +4,8 @@ Owns the reference ruleset: reading the active/effective rules and publishing ch
 versions. Every publish is audited with a before/after snapshot, so "who changed the meal cap, when,
 and from what" is answerable from the audit trail alone.
 
-Phase 1 boundary: this service *stores and serves* rules. It does not evaluate ``conditions`` /
-``actions`` — the existing category engine still does the evaluating, fed by
-:meth:`rules_for_engine`.
+This service stores and serves rules. The policy engine evaluates the typed fields and the
+``conditions`` / ``actions`` payloads returned by :meth:`rules_for_engine`.
 """
 
 from __future__ import annotations

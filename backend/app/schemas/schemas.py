@@ -129,6 +129,10 @@ class ExpenseItemCreateSchema(BaseModel):
 
     category: Optional[str] = Field(default="Miscellaneous / Others", max_length=64)
     subCategory: Optional[str] = Field(default="General Expense", max_length=120)
+    #: Scope for app.services.policy_engine.evaluate_travel_policy — see doc/travel-policy-rules.md.
+    #: Optional: most categories have no travel dimension and simply never match a travel rule.
+    travelType: Optional[str] = Field(default=None, max_length=32)
+    duration: Optional[str] = Field(default=None, max_length=16)
     amount: Optional[MoneyAmount] = None
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
     amountUSD: Optional[MoneyAmount] = None
@@ -171,6 +175,26 @@ class ExpenseItemCreateSchema(BaseModel):
     def _not_future(cls, value: Optional[date]) -> Optional[date]:
         if value is not None and (value - date.today()).days > _FUTURE_DATE_GRACE_DAYS:
             raise ValueError("cannot be in the future")
+        return value
+
+    @field_validator("travelType")
+    @classmethod
+    def _valid_travel_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        allowed = {"Local", "Domestic", "International"}
+        if value not in allowed:
+            raise ValueError(f"must be one of {sorted(allowed)}")
+        return value
+
+    @field_validator("duration")
+    @classmethod
+    def _valid_duration(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        allowed = {"Day", "Month"}
+        if value not in allowed:
+            raise ValueError(f"must be one of {sorted(allowed)}")
         return value
 
     @model_validator(mode="after")

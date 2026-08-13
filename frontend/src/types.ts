@@ -74,7 +74,7 @@ export interface ExpenseCategoryAdmin {
 export type ClaimStatus =
   | 'Draft'
   | 'Submitted'
-  | 'Processing_AI'
+  | 'Processing'
   | 'Auto_Approved'
   | 'Manager_Review'
   | 'Finance_Review'
@@ -82,7 +82,8 @@ export type ClaimStatus =
   | 'Rejected'
   | 'Disbursed'
   | 'Flagged_Fraud'
-  | 'Withdrawn';
+  | 'Withdrawn'
+  | 'Failed';
 
 export type ExpenseItemStatus =
   | 'Submitted'
@@ -208,8 +209,11 @@ export interface ExpenseClaim {
   
   policyValidation?: PolicyValidationReport;
   fraudScreening?: FraudScreeningReport;
-  
+
   status: ClaimStatus;
+  /** System-authored explanation of why this claim is on Policy_Hold/Flagged_Fraud, rolled up
+   * across its held items. Absent/undefined when nothing is held. */
+  holdReason?: string | null;
   workflowHistory: WorkflowStepLog[];
   comments: ClaimComment[];
 }
@@ -242,6 +246,9 @@ export interface Claim {
   workflowHistory: WorkflowStepLog[];
   withdrawnAt?: string | null;
   withdrawalReason?: string | null;
+  /** System-authored explanation of why this claim is on Policy_Hold/Flagged_Fraud/Failed,
+   * rolled up across its held items. Absent/undefined when nothing is held. */
+  holdReason?: string | null;
 }
 
 export interface PolicyRuleDefinition {

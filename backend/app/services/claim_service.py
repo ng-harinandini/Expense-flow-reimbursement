@@ -45,11 +45,14 @@ from app.models.enums import (
     AuditAction,
     AuditEntity,
     ClaimStatus,
+    ExpenseDuration,
     ExpenseItemStatus,
     FraudRiskLevel,
+    TravelType,
 )
 from app.models.expense_item import ExpenseItem
 from app.models.organization import Employee
+from app.repositories.claim_policy_rule_repository import ClaimPolicyRuleRepository
 from app.repositories.claim_repository import ClaimQuery, ClaimRepository
 from app.repositories.fraud_repository import FraudResultRepository
 from app.repositories.workflow_repository import ApprovalWorkflowRepository
@@ -57,8 +60,12 @@ from app.services import receipt_extraction
 from app.services.audit_service import AuditService
 from app.services.employee_service import EmployeeService
 from app.services.fraud_engine import screen_for_anomalies
-from app.services.mappers import item_to_engine_input, items_to_engine_corpus
-from app.services.policy_engine import evaluate_expense_policy
+from app.services.mappers import (
+    claim_policy_rules_to_engine_input,
+    item_to_engine_input,
+    items_to_engine_corpus,
+)
+from app.services.policy_engine import evaluate_expense_policy, evaluate_travel_policy
 from app.services.policy_rule_service import PolicyRuleService
 from app.services.s3_service import S3DownloadError, download_receipt_from_s3
 
@@ -74,6 +81,27 @@ CLAIM_ACTIONS = frozenset({"APPROVE", "REJECT", "FLAG_FRAUD"})
 
 #: How many peer claims to compare against during fraud screening.
 FRAUD_CORPUS_LIMIT = 200
+
+#: ``_evaluate_item_policy``'s report when the legacy category policy engine is off
+#: (``POLICY_RULES_ENGINE_ENABLED=false``, the default) — a clean pass, never a hold, so an item
+#: that would otherwise have no policy opinion at all isn't held for "missing configuration".
+_POLICY_ENGINE_DISABLED_REPORT: dict[str, Any] = {
+    "overallPassed": True,
+    "requiresManualReview": False,
+    "isWithinMaxLimit": True,
+    "isWithinAutoApproveLimit": True,
+    "maxLimitAllowed": None,
+    "autoApproveLimit": None,
+    "receiptRequired": False,
+    "receiptProvided": True,
+    "daysSinceExpense": None,
+    "requiresDirectorApprovalForAge": False,
+    "checks": [],
+    "reasoningSummary": (
+        "Category policy engine is disabled (POLICY_RULES_ENGINE_ENABLED=false); "
+        "no category-level policy check was run."
+    ),
+}
 
 # Which decision-memory kind a claim's resulting status is recorded as, from the outer `action()`
 # hook. A status with no entry here is not recorded from there: Draft/Submitted/Processing are not
@@ -171,16 +199,21 @@ class ClaimService:
         fraud_repository: FraudResultRepository,
         workflow_repository: ApprovalWorkflowRepository,
         employee_service: EmployeeService,
-        policy_rule_service: PolicyRuleService,
+        policy_rule_service: Optional[PolicyRuleService],
         audit_service: AuditService,
         decision_memory: Optional[DecisionMemoryRecorder] = None,
         duplicate_detection: Optional[DuplicateDetectionRecorder] = None,
         document_classification: Optional[DocumentClassificationRecorder] = None,
+        claim_policy_rule_repository: Optional[ClaimPolicyRuleRepository] = None,
     ) -> None:
         self._claims = claim_repository
         self._fraud = fraud_repository
         self._workflows = workflow_repository
         self._employees = employee_service
+        # None means the legacy category policy engine (`policy_rules` table) is skipped during
+        # claim processing — see `POLICY_RULES_ENGINE_ENABLED` / `get_optional_policy_rule_service`
+        # in `app.core.deps`. `claim_policy_rules` (below, `self._travel_policy_rules`) is the
+        # current engine and is never gated by this.
         self._policies = policy_rule_service
         self._audit = audit_service
         # None (the default, and what every existing caller/test still constructs with) means the
@@ -189,6 +222,7 @@ class ClaimService:
         self._decision_memory = decision_memory
         self._duplicate_detection = duplicate_detection
         self._document_classification = document_classification
+        self._travel_policy_rules = claim_policy_rule_repository
 
     def _remember(
         self, kind: DecisionMemoryKind, subject_id: object, summary: str, *, actor: Actor
@@ -349,14 +383,30 @@ class ClaimService:
     # --- submission ----------------------------------------------------------
 
     def submit_claim(self, payload: dict[str, Any], *, actor: Actor) -> Claim:
-        """Create and fully process a claim: Draft → Submitted → Processing → routed.
+        """Create a claim and hand it to the AI pipeline: Draft → Submitted → Processing → routed.
 
-        Mirrors ``POST /claims``, which has always been a create-and-submit call. All of it runs in
-        the caller's single transaction.
+        Mirrors ``POST /claims``, which has always been a create-and-submit call. Kept as one call
+        for existing callers (tests, any non-HTTP caller) that want the whole pipeline to run
+        synchronously and return the final routed claim — ``POST /claims`` itself no longer calls
+        this directly; see :meth:`create_and_submit_claim` / :meth:`process_submitted_claim` for the
+        split that lets the route return as soon as the claim is ``Submitted``.
 
         The employee must have an active reporting manager: the manager is the first approval step
         (see :meth:`_start_workflow`), so without one the claim has no approver. That precondition
         is checked before anything is written, so a rejected submission leaves no draft behind.
+        """
+        claim, actor = self.create_and_submit_claim(payload, actor=actor)
+        return self.process_submitted_claim(claim, actor=actor)
+
+    def create_and_submit_claim(
+        self, payload: dict[str, Any], *, actor: Actor
+    ) -> tuple[Claim, Actor]:
+        """Draft → Submitted only. The AI pipeline (:meth:`process_submitted_claim`) is a separate
+        step so ``POST /claims`` can commit and respond here, then run the pipeline as a background
+        task instead of holding the request open for it.
+
+        Returns the claim together with ``actor`` (renamed to the employee's full name) since the
+        caller needs the same actor identity to later call :meth:`process_submitted_claim`.
         """
         employee = self._employees.resolve_actor_employee(actor)
         validators.require_reporting_manager(employee)
@@ -374,8 +424,16 @@ class ClaimService:
             step_name="Submit Claim",
             action=f"Submitted expense claim {claim.claim_number}",
         )
+        return claim, actor
 
-        # Submitted → Processing → routed (machine-driven)
+    def process_submitted_claim(self, claim: Claim, *, actor: Actor) -> Claim:
+        """Submitted → Processing → routed (machine-driven), then audit + decision-memory.
+
+        Runs in its own transaction (the caller commits). On any unhandled exception from
+        :meth:`_process`, callers running this in the background should catch it and route the
+        claim to ``ClaimStatus.FAILED`` instead of leaving it stuck in ``Processing`` forever — see
+        ``app.api.claims._run_claim_pipeline``.
+        """
         self._process(claim, actor=actor)
 
         categories = ", ".join(sorted({i.category for i in claim.items}))
@@ -407,6 +465,29 @@ class ClaimService:
         # self._scan_duplicates(claim)
         # History, comments, fraud result and workflow were inserted during this transaction;
         # expire so the serialized aggregate reflects all of them.
+        return self._claims.refresh(claim)
+
+    def mark_claim_failed(self, claim: Claim, *, actor: Actor, reason: str) -> Claim:
+        """Processing → Failed, for when :meth:`process_submitted_claim` raised.
+
+        Called from a fresh transaction (the one the background task opened after rolling back the
+        failed attempt). ``actor`` is the employee who originally submitted the claim — same
+        convention :meth:`_process` uses for its own system-role transitions (``actor_role`` is
+        ``SYSTEM_ROLE``, but ``actor_sub``/``actor_name`` still identify whose claim this was).
+        """
+        system = Actor.system()
+        claim.hold_reason = reason
+        self._claims.transition_status(
+            claim,
+            ClaimStatus.FAILED,
+            actor_role=SYSTEM_ROLE,
+            actor_sub=actor.sub,
+            actor_name=system.name,
+            step_name="Processing Failed",
+            action="Automated policy/fraud evaluation raised an unhandled error.",
+            notes=reason,
+            outcome="FAILED",
+        )
         return self._claims.refresh(claim)
 
     def _build_draft(
@@ -568,6 +649,8 @@ class ClaimService:
             category_id=self._resolve_category_id(category),
             category=category,
             sub_category=(payload.get("subCategory") or "General Expense").strip(),
+            travel_type=TravelType.coerce(payload["travelType"]) if payload.get("travelType") else None,
+            duration=ExpenseDuration.coerce(payload["duration"]) if payload.get("duration") else None,
             expense_date=expense_date,
             merchant_vendor=merchant_vendor,
             purpose_description=(payload.get("purposeDescription") or "").strip(),
@@ -606,10 +689,22 @@ class ClaimService:
         ).scalar_one_or_none()
         return row
 
-    def _process(self, claim: Claim, *, actor: Actor) -> Claim:
-        """Submitted → Processing → routed. Evaluation and screening happen here."""
-        system = Actor.system()
+    def begin_processing(self, claim: Claim, *, actor: Actor) -> Claim:
+        """Submitted → Processing, on its own so a caller can commit it before the (slower, more
+        failure-prone) evaluation body runs.
 
+        Split out for :meth:`app.api.claims._run_claim_pipeline`: that background task commits this
+        transition alone first, so if the evaluation body then raises and its transaction is rolled
+        back, the claim is left at ``Processing`` — not ``Submitted`` — which is what makes
+        ``Processing -> Failed`` (the only legal edge into ``FAILED``) reachable from
+        :meth:`mark_claim_failed`. A no-op (returns immediately) if the claim is already
+        ``Processing``, so :meth:`_process`'s own call to this remains correct for every existing
+        synchronous caller (``submit_claim``, tests) that has never committed in between.
+        """
+        if claim.status == ClaimStatus.PROCESSING:
+            return claim
+
+        system = Actor.system()
         self._claims.transition_status(
             claim,
             ClaimStatus.PROCESSING,
@@ -619,12 +714,25 @@ class ClaimService:
             step_name="Processing",
             action="Started automated policy and fraud evaluation",
         )
+        return claim
+
+    def _process(self, claim: Claim, *, actor: Actor) -> Claim:
+        """Submitted → Processing → routed. Evaluation and screening happen here."""
+        system = Actor.system()
+        self.begin_processing(claim, actor=actor)
+
+        # TEMPORARY dev-only hook to manually test the Failed status path — remove before merging.
+        # Submit a claim with "FORCE_FAIL" anywhere in its title to make this raise on purpose.
+        if claim.title and "FORCE_FAIL" in claim.title:
+            raise RuntimeError("Forced failure for manual Failed-status testing.")
 
         # One effective-dated ruleset for the whole claim, chosen by the earliest item date.
         # Fetching per item would mean two lines of one report judged under different rule
         # versions — surprising to a reviewer reading a single decision.
         earliest = min((i.expense_date for i in claim.items), default=date.today())
-        rules = self._policies.rules_for_engine(earliest)
+        # self._policies is None when POLICY_RULES_ENGINE_ENABLED is off (the default) — nothing to
+        # fetch, and _evaluate_item_policy short-circuits before ever reading `rules`.
+        rules = self._policies.rules_for_engine(earliest) if self._policies is not None else []
 
         # The peer corpus is read once, then grown as each item is judged: without appending, the
         # split-transaction check could not see that two items of *this* claim share a vendor and
@@ -635,6 +743,8 @@ class ClaimService:
             )
         )
 
+        travel_policy_reports = self._evaluate_travel_policy(claim, on_date=earliest)
+
         policy_reports: list[dict[str, Any]] = []
         fraud_reports: list[dict[str, Any]] = []
         for item in claim.items:
@@ -642,12 +752,40 @@ class ClaimService:
             engine_input = item_to_engine_input(item, claim=claim)
             policy_report = self._evaluate_item_policy(item, claim=claim, rules=rules)
             fraud_report = self._screen_item_fraud(item, claim=claim, corpus=corpus)
-            item.status = self._route_item(policy_report, fraud_report, classification_report)
+            travel_policy_report = travel_policy_reports.get(item.id)
+            item.status = self._route_item(
+                policy_report, fraud_report, classification_report, travel_policy_report
+            )
+            item.hold_reason = self._build_hold_reason(
+                item.status, policy_report, fraud_report, classification_report, travel_policy_report
+            )
+            logger.info(
+                "claim.item.routed",
+                extra={
+                    "claimId": str(claim.id),
+                    "claimNumber": claim.claim_number,
+                    "itemId": str(item.id),
+                    "lineNumber": item.line_number,
+                    "category": item.category,
+                    "status": item.status.value,
+                    "holdReason": item.hold_reason,
+                },
+            )
             policy_reports.append(policy_report)
             fraud_reports.append(fraud_report)
             corpus.append(engine_input)
 
         self._record_claim_fraud_result(claim, fraud_reports)
+
+        held_items = [item for item in claim.items if item.hold_reason]
+        claim.hold_reason = (
+            " | ".join(
+                f"Item #{item.line_number} ({item.category}): {item.hold_reason}"
+                for item in held_items
+            )
+            if held_items
+            else None
+        )
 
         target = self._roll_up_status(claim)
         held = [i.line_number for i in claim.items if i.status != ExpenseItemStatus.AUTO_APPROVED]
@@ -685,9 +823,35 @@ class ClaimService:
         The engine itself is unchanged — it has always judged a single expense. The report is
         stored per item because the claim's roll-up is per item: a reviewer must be able to see
         *which* line held the claim, not just that something did.
+
+        ``self._policies is None`` (``POLICY_RULES_ENGINE_ENABLED`` off, the default) short-circuits
+        to a clean no-opinion report *before* calling the engine — deliberately not "call it with an
+        empty ruleset", which would instead read as every category having no configured policy and
+        hold every item for manual review. ``claim_policy_rules``
+        (:meth:`_evaluate_travel_policy`) is the current engine and is unaffected by this flag.
         """
+        if self._policies is None:
+            report = dict(_POLICY_ENGINE_DISABLED_REPORT)
+            item.policy_validation = report
+            return report
+
         report = evaluate_expense_policy(item_to_engine_input(item, claim=claim), rules)
         item.policy_validation = report
+
+        log_context = {
+            "claimId": str(claim.id),
+            "claimNumber": claim.claim_number,
+            "itemId": str(item.id),
+            "lineNumber": item.line_number,
+            "category": item.category,
+            "overallPassed": report.get("overallPassed"),
+            "requiresManualReview": report.get("requiresManualReview"),
+            "reasoningSummary": report.get("reasoningSummary"),
+        }
+        if not report.get("overallPassed") or report.get("requiresManualReview"):
+            logger.warning("claim.policy_validation.flagged", extra=log_context)
+        else:
+            logger.info("claim.policy_validation.evaluated", extra=log_context)
 
         self._claims.record_step(
             claim,
@@ -704,6 +868,63 @@ class ClaimService:
         )
         return report
 
+    def _evaluate_travel_policy(
+        self, claim: Claim, *, on_date: date
+    ) -> dict[uuid.UUID, dict[str, Any]]:
+        """Run the local-travel policy engine over every item of the claim at once.
+
+        A separate, additive layer from :meth:`_evaluate_item_policy` — see
+        ``doc/travel-policy-rules.md``. Returns an empty dict (no travel-policy opinion on any
+        item, byte-identical to before this capability existed) when the repository was never
+        wired — the same "``None`` means off" treatment every other optional ``ClaimService``
+        dependency gets, decided once in ``app.core.deps`` rather than here.
+        """
+        if self._travel_policy_rules is None:
+            return {}
+
+        rules = claim_policy_rules_to_engine_input(
+            self._travel_policy_rules.list_effective(on_date)
+        )
+        items_input = [item_to_engine_input(item, claim=claim) for item in claim.items]
+        reports = evaluate_travel_policy(items_input, rules)
+
+        # evaluate_travel_policy preserves input order and emits exactly one report per item.
+        by_item_id: dict[uuid.UUID, dict[str, Any]] = {}
+        for item, report in zip(claim.items, reports):
+            item.travel_policy_validation = report
+            by_item_id[item.id] = report
+
+            log_context = {
+                "claimId": str(claim.id),
+                "claimNumber": claim.claim_number,
+                "itemId": str(item.id),
+                "lineNumber": item.line_number,
+                "category": item.category,
+                "overallPassed": report.get("overallPassed"),
+                "requiresManualReview": report.get("requiresManualReview"),
+                "eligibleAmount": report.get("eligibleAmount"),
+                "reasoningSummary": report.get("reasoningSummary"),
+            }
+            if not report.get("overallPassed") or report.get("requiresManualReview"):
+                logger.warning("claim.travel_policy.flagged", extra=log_context)
+            else:
+                logger.info("claim.travel_policy.evaluated", extra=log_context)
+
+            self._claims.record_step(
+                claim,
+                actor_name="ExpenseFlow Travel Policy Engine",
+                actor_role="admin",
+                step_name=f"Local Travel Policy (item {item.line_number})",
+                action=(
+                    "Passed local travel policy constraints"
+                    if report.get("overallPassed")
+                    else "Flagged local travel policy violation"
+                ),
+                notes=report.get("reasoningSummary"),
+                outcome="SUCCESS" if report.get("overallPassed") else "WARNING",
+            )
+        return by_item_id
+
     def _screen_item_fraud(
         self, item: ExpenseItem, *, claim: Claim, corpus: list[dict[str, Any]]
     ) -> dict[str, Any]:
@@ -714,6 +935,22 @@ class ClaimService:
         item.fraud_risk_level = FraudRiskLevel.coerce(report["riskLevel"])
         item.fraud_flags = report["flags"]
         item.is_fraud_flagged = bool(report["isFlagged"])
+
+        log_context = {
+            "claimId": str(claim.id),
+            "claimNumber": claim.claim_number,
+            "itemId": str(item.id),
+            "lineNumber": item.line_number,
+            "category": item.category,
+            "riskScore": report["riskScore"],
+            "riskLevel": report["riskLevel"],
+            "isFlagged": report["isFlagged"],
+            "rationale": report["rationale"],
+        }
+        if report["isFlagged"]:
+            logger.warning("claim.fraud_screening.flagged", extra=log_context)
+        else:
+            logger.info("claim.fraud_screening.evaluated", extra=log_context)
 
         self._claims.record_step(
             claim,
@@ -887,13 +1124,15 @@ class ClaimService:
         policy_report: dict[str, Any],
         fraud_report: dict[str, Any],
         classification_report: Optional[dict[str, Any]] = None,
+        travel_policy_report: Optional[dict[str, Any]] = None,
     ) -> ExpenseItemStatus:
         """Destination for one evaluated item. Thresholds unchanged from the claim-level routing.
 
-        ``classification_report`` only ever pushes an otherwise-clean item to ``POLICY_HOLD`` — the
-        same "ask a human" status a policy violation already uses. This is the one place the new
-        document-classification capability affects routing; the policy/fraud engines themselves
-        (``evaluate_expense_policy``/``screen_for_anomalies``) are unchanged.
+        ``classification_report`` and ``travel_policy_report`` only ever push an otherwise-clean
+        item to ``POLICY_HOLD`` — the same "ask a human" status a category-policy violation
+        already uses. This is the one place either capability affects routing; the underlying
+        engines (``evaluate_expense_policy``/``evaluate_travel_policy``/``screen_for_anomalies``)
+        are unchanged.
         """
         if fraud_report["isFlagged"] and fraud_report["riskScore"] >= FRAUD_ROUTING_THRESHOLD:
             return ExpenseItemStatus.FRAUD_FLAG
@@ -901,9 +1140,54 @@ class ClaimService:
             return ExpenseItemStatus.POLICY_HOLD
         if policy_report.get("requiresManualReview"):
             return ExpenseItemStatus.POLICY_HOLD
+        if travel_policy_report and (
+            not travel_policy_report.get("overallPassed")
+            or travel_policy_report.get("requiresManualReview")
+        ):
+            return ExpenseItemStatus.POLICY_HOLD
         if classification_report and classification_report.get("categoryReviewRequired"):
             return ExpenseItemStatus.POLICY_HOLD
         return ExpenseItemStatus.AUTO_APPROVED
+
+    @staticmethod
+    def _build_hold_reason(
+        status: ExpenseItemStatus,
+        policy_report: dict[str, Any],
+        fraud_report: dict[str, Any],
+        classification_report: Optional[dict[str, Any]],
+        travel_policy_report: Optional[dict[str, Any]],
+    ) -> Optional[str]:
+        """One human-readable sentence explaining why an item landed where it did.
+
+        ``None`` for a clean ``AUTO_APPROVED`` item — there is nothing to explain. Mirrors
+        ``_route_item``'s own precedence exactly, so this never cites a reason that did not
+        actually drive the routing decision (e.g. a policy violation on an item that was actually
+        held for fraud, not policy).
+        """
+        if status == ExpenseItemStatus.FRAUD_FLAG:
+            return fraud_report.get("rationale") or "Flagged for fraud review."
+
+        if status != ExpenseItemStatus.POLICY_HOLD:
+            return None
+
+        reasons: list[str] = []
+        if not policy_report.get("overallPassed") or policy_report.get("requiresManualReview"):
+            summary = policy_report.get("reasoningSummary")
+            if summary:
+                reasons.append(summary)
+        if travel_policy_report and (
+            not travel_policy_report.get("overallPassed")
+            or travel_policy_report.get("requiresManualReview")
+        ):
+            summary = travel_policy_report.get("reasoningSummary")
+            if summary:
+                reasons.append(summary)
+        if classification_report and classification_report.get("categoryReviewRequired"):
+            reasons.append(
+                classification_report.get("notes")
+                or "AI category classification requires manual review."
+            )
+        return " ".join(reasons) if reasons else "Held for manual review."
 
     @staticmethod
     def _roll_up_status(claim: Claim) -> ClaimStatus:

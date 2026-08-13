@@ -24,7 +24,7 @@ def test_status_values_match_the_frontend_contract():
     assert set(ClaimStatus.values()) == {
         "Draft",
         "Submitted",
-        "Processing_AI",
+        "Processing",
         "Auto_Approved",
         "Manager_Review",
         "Finance_Review",
@@ -32,6 +32,8 @@ def test_status_values_match_the_frontend_contract():
         "Rejected",
         "Disbursed",
         "Flagged_Fraud",
+        "Withdrawn",
+        "Failed",
     }
 
 
@@ -40,8 +42,8 @@ def test_status_values_match_the_frontend_contract():
     [
         ("Draft", S.DRAFT),
         ("DRAFT", S.DRAFT),
-        ("Processing", S.PROCESSING),          # canonical spec spelling
-        ("Processing_AI", S.PROCESSING),       # wire value
+        ("Processing", S.PROCESSING),           # canonical spec spelling and wire value (same string)
+        ("PROCESSING", S.PROCESSING),
         ("Pending_Review", S.MANAGER_REVIEW),  # canonical spec spelling
         ("pending review", S.MANAGER_REVIEW),
         ("Reimbursed", S.REIMBURSED),          # canonical spec spelling
@@ -69,6 +71,7 @@ def test_coerce_rejects_unknown_status():
         (S.PROCESSING, S.AUTO_APPROVED),
         (S.PROCESSING, S.MANAGER_REVIEW),
         (S.PROCESSING, S.FLAGGED_FRAUD),
+        (S.PROCESSING, S.FAILED),
         (S.MANAGER_REVIEW, S.FINANCE_REVIEW),
         (S.MANAGER_REVIEW, S.APPROVED),
         (S.MANAGER_REVIEW, S.REJECTED),
@@ -91,6 +94,8 @@ def test_legal_transitions(current, target):
         (S.SUBMITTED, S.REIMBURSED),
         (S.PROCESSING, S.REIMBURSED),   # no payout without a decision
         (S.PROCESSING, S.REJECTED),     # rejection is a human act
+        (S.FAILED, S.PROCESSING),       # terminal
+        (S.FAILED, S.SUBMITTED),
         (S.MANAGER_REVIEW, S.REIMBURSED),
         (S.APPROVED, S.REIMBURSED),     # retired: Approve is now the final reviewer step
         (S.AUTO_APPROVED, S.REIMBURSED),
@@ -119,8 +124,11 @@ def test_invalid_transition_error_reports_the_legal_alternatives():
 
 
 def test_terminal_statuses():
-    assert fsm.TERMINAL_STATUSES == frozenset({S.REJECTED, S.REIMBURSED})
+    assert fsm.TERMINAL_STATUSES == frozenset(
+        {S.REJECTED, S.REIMBURSED, S.WITHDRAWN, S.FAILED}
+    )
     assert fsm.is_terminal(S.REJECTED)
+    assert fsm.is_terminal(S.FAILED)
     assert not fsm.is_terminal(S.APPROVED)
 
 
@@ -157,6 +165,7 @@ def test_only_draft_is_editable():
         ("auditor", S.FLAGGED_FRAUD),
         (fsm.SYSTEM_ROLE, S.PROCESSING),
         (fsm.SYSTEM_ROLE, S.AUTO_APPROVED),
+        (fsm.SYSTEM_ROLE, S.FAILED),
     ],
 )
 def test_roles_permitted_for_target(role, target):
@@ -174,6 +183,8 @@ def test_roles_permitted_for_target(role, target):
         ("employee", S.PROCESSING),      # machine-only step
         ("manager", S.AUTO_APPROVED),    # auto-approval is not a human decision
         ("employee", S.FLAGGED_FRAUD),
+        ("employee", S.FAILED),          # a failed pipeline run is not a human decision
+        ("manager", S.FAILED),
     ],
 )
 def test_roles_forbidden_for_target(role, target):

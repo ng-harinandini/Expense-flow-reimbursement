@@ -206,6 +206,11 @@ class BedrockReceiptExtractor:
                 parts.append(f"options={spec.get('options')}")
             if spec.get("required"):
                 parts.append("required=true")
+            # The DB description is the only place a field's real-world synonyms live (e.g.
+            # "invoice_number" is also printed as "Bill No." / "Receipt No." / "Folio No." on many
+            # documents) — omitting it left the model with nothing but a field name to go on.
+            if spec.get("description"):
+                parts.append(f"description=\"{spec.get('description')}\"")
             lines.append(" ".join(parts))
         return lines
 

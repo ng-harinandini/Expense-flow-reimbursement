@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "./client";
 import type { ReceiptExtraction } from "./expenseItems";
@@ -21,6 +22,19 @@ interface CreateClaimItem {
   ocrSource?: string;
   ocrConfidence?: Record<string, number> | null;
   ocrExtractedJson?: Record<string, unknown> | null;
+  /**
+   * Scope for the local-travel policy engine (see doc/travel-policy-rules.md) — must be sent at
+   * this top level, not inside `employeeCorrectedData`, or `evaluate_travel_policy` never matches
+   * a rule for the item regardless of what the employee selected.
+   */
+  travelType?: string;
+  duration?: string;
+  /**
+   * Fields the form collects that have no dedicated column on `ExpenseItemCreateSchema`
+   * (invoice number, travel route, attendee/day counts). Packed here rather than dropped
+   * silently — the backend already accepts this as freeform JSON.
+   */
+  employeeCorrectedData?: Record<string, unknown> | null;
 }
 
 interface CreateClaimRequest {
@@ -44,8 +58,9 @@ function buildItem(draft: ExpenseItemDraft): CreateClaimItem {
   return {
     category: draft.category || undefined,
     amount: draft.amount,
+    currency: draft.currency || undefined,
     merchantVendor: draft.merchantVendor || undefined,
-    expenseDate: draft.expenseFromDate || undefined,
+    expenseDate: draft.invoiceDate || undefined,
     purposeDescription: draft.description || undefined,
     receiptAttached: true,
     fileUrl: ext?.fileUrl ?? null,
@@ -56,6 +71,17 @@ function buildItem(draft: ExpenseItemDraft): CreateClaimItem {
     ocrSource: ext?.ocrSource,
     ocrConfidence: ext?.ocrConfidence ?? null,
     ocrExtractedJson: (ext?.extraction as Record<string, unknown> | null) ?? null,
+    // The only two values the seeded rules currently scope on (doc/travel-policy-rules.md) are
+    // "Local" travel taken over a "Day" — there's no UI control for `duration` yet, and every
+    // rule's duration axis is either "Day" or a wildcard, so this is never wrong to send.
+    travelType: draft.travelType || undefined,
+    duration: "Day",
+    employeeCorrectedData: {
+      invoiceNumber: draft.invoiceNumber || undefined,
+      travelRoute: draft.travelRoute || undefined,
+      numberOfAttendees: draft.numberOfAttendees,
+      numberOfDays: draft.numberOfDays,
+    },
   };
 }
 
@@ -94,6 +120,16 @@ export interface GetClaimsParams {
 
 export const CLAIMS_QUERY_KEY = ["claims"] as const;
 
+/**
+ * Statuses the AI pipeline can still be working through. A claim in one of these is polled by
+ * {@link useClaimsQuery}/{@link useClaimQuery}; anything else (a terminal outcome, or `Failed`)
+ * stops polling.
+ */
+const IN_PROGRESS_STATUSES: ReadonlySet<ClaimStatus> = new Set([
+  "Submitted",
+  "Processing",
+]);
+
 /** Raw shape the backend serialises — `title` maps to the frontend's `claimTitle`. */
 interface ClaimApiShape {
   id: string;
@@ -119,6 +155,7 @@ interface ClaimApiShape {
   workflowHistory: WorkflowStepLog[];
   withdrawnAt: string | null;
   withdrawalReason: string | null;
+  holdReason?: string | null;
   [key: string]: unknown;
 }
 
@@ -151,6 +188,7 @@ function mapClaim(raw: ClaimApiShape): Claim {
     workflowHistory: raw.workflowHistory ?? [],
     withdrawnAt: raw.withdrawnAt ?? null,
     withdrawalReason: raw.withdrawalReason ?? null,
+    holdReason: raw.holdReason ?? null,
   };
 }
 
@@ -208,7 +246,60 @@ export function useClaimsQuery(params: GetClaimsParams = {}) {
   return useQuery({
     queryKey: [...CLAIMS_QUERY_KEY, params],
     queryFn: () => getClaims(params),
+    // Keep polling the list while any row is still being processed by the background pipeline, so
+    // a just-submitted claim's status visibly updates (Submitted -> Auto_Approved/.../Failed)
+    // without the user having to reload the page.
+    refetchInterval: (query) => {
+      const claims = query.state.data;
+      const hasInProgress = claims?.some((c) => IN_PROGRESS_STATUSES.has(c.status));
+      return hasInProgress ? 3000 : false;
+    },
   });
+}
+
+// ---------------------------------------------------------------------------
+// GET /claims/{id}
+// ---------------------------------------------------------------------------
+
+export function getClaim(claimId: string): Promise<Claim> {
+  return apiRequest<ClaimApiShape>(`/claims/${encodeURIComponent(claimId)}`).then(mapClaim);
+}
+
+/**
+ * One claim, polled every few seconds while it's still `Submitted`/`Processing` — the window
+ * during which `POST /claims` has responded but the background pipeline (policy, fraud,
+ * classification) hasn't routed it yet. Polling stops itself the moment the claim reaches a
+ * terminal status or `Failed`, so an approved/rejected/held claim being viewed doesn't keep
+ * refetching forever.
+ */
+export function useClaimQuery(claimId: string | undefined, options: { enabled?: boolean } = {}) {
+  const queryClient = useQueryClient();
+  const wasInProgress = useRef(false);
+
+  const query = useQuery({
+    queryKey: [...CLAIMS_QUERY_KEY, claimId],
+    queryFn: () => getClaim(claimId as string),
+    enabled: Boolean(claimId) && (options.enabled ?? true),
+    refetchInterval: (q) => {
+      const status = q.state.data?.status;
+      return status && IN_PROGRESS_STATUSES.has(status) ? 3000 : false;
+    },
+  });
+
+  const status = query.data?.status;
+  useEffect(() => {
+    if (!status) return;
+    const inProgress = IN_PROGRESS_STATUSES.has(status);
+    // The claims list (My Claims grid) has its own cached snapshot from whenever it last loaded —
+    // refresh it once this claim leaves Submitted/Processing so the grid's row updates too,
+    // without the user having to manually reload the page.
+    if (wasInProgress.current && !inProgress) {
+      queryClient.invalidateQueries({ queryKey: CLAIMS_QUERY_KEY });
+    }
+    wasInProgress.current = inProgress;
+  }, [status, queryClient]);
+
+  return query;
 }
 
 // ---------------------------------------------------------------------------

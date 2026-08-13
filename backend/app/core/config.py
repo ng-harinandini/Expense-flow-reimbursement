@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024
     TEXTRACT_ENABLED: bool = False
 
+    # --- Category policy engine (legacy) ---
+    # Gates the older, category-keyed engine (`policy_rules` table / PolicyRuleService /
+    # evaluate_expense_policy) that used to run on every submitted item. Superseded by the
+    # database-driven `claim_policy_rules` engine (see doc/travel-policy-rules.md), which is never
+    # gated by this flag and always runs. Off by default: an untouched deployment no longer takes
+    # this engine's verdict into account when routing a claim. The `policy_rules` admin CRUD API
+    # (`app/api/policy_rules.py`) is unaffected either way.
+    POLICY_RULES_ENGINE_ENABLED: bool = False
+
     # --- AWS Cognito (authentication) ---
     # Region is derived from the pool id prefix (e.g. "ap-south-1_xxxxx") when not set explicitly.
     COGNITO_REGION: Optional[str] = None

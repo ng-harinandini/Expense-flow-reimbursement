@@ -60,10 +60,14 @@ from app.models.base import (
 )
 from app.models.claim import MONEY
 from app.models.enums import (
+    ExpenseDuration,
     ExpenseItemStatus,
     FraudRiskLevel,
+    TravelType,
+    expense_duration_enum,
     expense_item_status_enum,
     fraud_risk_level_enum,
+    travel_type_enum,
 )
 
 
@@ -130,6 +134,12 @@ class ExpenseItem(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base
     category: Mapped[str] = mapped_column(String(64), nullable=False)
     sub_category: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
 
+    # --- local travel policy scope (app.services.policy_engine.evaluate_travel_policy) ---
+    # Nullable: most categories have no travel dimension, and a NULL value simply never matches a
+    # travel-scoped ClaimPolicyRule. See doc/travel-policy-rules.md.
+    travel_type: Mapped[Optional[TravelType]] = mapped_column(travel_type_enum, nullable=True)
+    duration: Mapped[Optional[ExpenseDuration]] = mapped_column(expense_duration_enum, nullable=True)
+
     # --- expense facts (the resolved values both engines read) ---
     expense_date: Mapped[date] = mapped_column(Date, nullable=False)
     merchant_vendor: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -174,6 +184,14 @@ class ExpenseItem(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticLockMixin, Base
 
     # --- evaluation snapshots (the evidence the claim's roll-up was computed from) ---
     policy_validation: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Kept separate from policy_validation above (a different report shape, written by a different
+    # engine — app.services.policy_engine.evaluate_travel_policy) rather than merged into it.
+    travel_policy_validation: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # One human-readable sentence explaining why this item landed on Policy_Hold/Fraud_Flag —
+    # ClaimService._build_hold_reason combines whichever of the reports above actually drove the
+    # routing decision. NULL for an item that was never held. Distinct from decision_notes/
+    # rejection_reason below, which are human-authored at review time, not system-generated.
+    hold_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     fraud_risk_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     fraud_risk_level: Mapped[Optional[FraudRiskLevel]] = mapped_column(
         fraud_risk_level_enum, nullable=True

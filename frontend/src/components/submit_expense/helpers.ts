@@ -54,6 +54,41 @@ export const EXPENSE_CATEGORIES = [
   "Miscellaneous / Others",
 ];
 
+export const CURRENCY_CODES = [
+  "INR",
+  "USD",
+  "EUR",
+  "GBP",
+  "AUD",
+  "BRL",
+  "CAD",
+  "CHF",
+  "CNY",
+  "CZK",
+  "DKK",
+  "HKD",
+  "HUF",
+  "IDR",
+  "ILS",
+  "ISK",
+  "JPY",
+  "KRW",
+  "MXN",
+  "MYR",
+  "NOK",
+  "NZD",
+  "PHP",
+  "PLN",
+  "RON",
+  "SEK",
+  "SGD",
+  "THB",
+  "TRY",
+  "ZAR",
+];
+
+export const TRAVEL_TYPES = ["Local", "Domestic", "International"] as const;
+
 export const MAX_EXPENSE_ITEMS = 10;
 
 export const CATEGORY_ICONS: Record<string, LucideIcon> = {
@@ -135,4 +170,30 @@ export function formatDdMmYyyy(isoDate: string) {
   if (!match) return isoDate;
   const [, year, month, day] = match;
   return `${day}/${month}/${year}`;
+}
+
+/** `isoDate` shifted forward by `days` days, still in `YYYY-MM-DD` form. */
+function addDays(isoDate: string, days: number): string {
+  const date = new Date(`${isoDate}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Expense items whose date span — `invoiceDate` through `invoiceDate + numberOfDays - 1` —
+ * isn't fully contained within the claim's `fromDate`..`toDate` window. String comparison is
+ * enough here since both sides stay in `YYYY-MM-DD` form, which sorts identically to the dates
+ * it represents.
+ */
+export function findItemsOutsideClaimDuration(
+  items: ExpenseItemDraft[],
+  fromDate: string,
+  toDate: string
+): ExpenseItemDraft[] {
+  if (!fromDate || !toDate) return [];
+  return items.filter((item) => {
+    if (!item.invoiceDate) return false;
+    const itemEndDate = addDays(item.invoiceDate, (item.numberOfDays || 1) - 1);
+    return item.invoiceDate < fromDate || itemEndDate > toDate;
+  });
 }
