@@ -27,6 +27,21 @@ def _configured_number(mapping: dict[str, Any], *keys: str) -> Optional[float]:
     return None
 
 
+#: EmployeeGrade wire value -> GradeBand wire value. A fixed business mapping, not a database
+#: table — see doc/travel-policy-rules.md. Grades not covered here have no band and therefore
+#: never match a band-scoped ClaimPolicyRule (an unrecognized grade is a data problem, not a
+#: reason to guess a band).
+GRADE_TO_BAND: dict[str, str] = {
+    "VP": "Band 1",
+    "Director": "Band 1",
+    "L5": "Band 2",
+    "L4": "Band 3",
+    "L3": "Band 3",
+    "L2": "Band 4",
+    "L1": "Band 4",
+}
+
+
 def _rule_id(code: str, suffix: str) -> str:
     """Use the durable database rule code as the stable report identity."""
     return f"{code}_{suffix}" if code else f"POLICY_{suffix}"
@@ -404,3 +419,171 @@ def evaluate_expense_policy(
         "checks": checks,
         "reasoningSummary": reasoning_summary,
     }
+
+
+def _travel_rule_matches(
+    rule: Dict[str, Any],
+    *,
+    category: Optional[str],
+    travel_type: Optional[str],
+    grade_band: Optional[str],
+    duration: Optional[str],
+) -> bool:
+    """``ClaimPolicyRule`` scope match: each axis is either a wildcard (``None``) or exact."""
+
+    def _axis(rule_value: Any, item_value: Any) -> bool:
+        return rule_value is None or rule_value == item_value
+
+    return (
+        _axis(rule.get("category"), category)
+        and _axis(rule.get("travelType"), travel_type)
+        and _axis(rule.get("gradeBand"), grade_band)
+        and _axis(rule.get("duration"), duration)
+    )
+
+
+def evaluate_travel_policy(
+    items: Sequence[Dict[str, Any]],
+    rules: Optional[Sequence[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Evaluate every item of a claim against the database-backed local-travel ruleset.
+
+    A separate, additive layer from :func:`evaluate_expense_policy` (which is unchanged and keeps
+    matching on category alone) — see ``doc/travel-policy-rules.md``. Runs over the whole claim in
+    one call (not one item at a time) because that is this engine's natural unit, even though
+    today's rules happen to be independent per item.
+
+    Verification is plain arithmetic and dictionary lookups, deliberately: an LLM has no role in
+    deciding pass/fail here, only (upstream, elsewhere) in extracting the raw amount/category off
+    a receipt in the first place.
+    """
+    rule_list: Sequence[Dict[str, Any]] = rules or []
+    reports: List[Dict[str, Any]] = []
+
+    for item in items:
+        item_id = item.get("id")
+        category = item.get("category")
+        travel_type = item.get("travelType")
+        duration = item.get("duration")
+        grade = str(item.get("employeeGrade") or "")
+        grade_band = GRADE_TO_BAND.get(grade)
+        amount = _number(item.get("amount")) or 0.0
+        currency = str(item.get("currency") or "INR")
+
+        matches = [
+            rule
+            for rule in rule_list
+            if _travel_rule_matches(
+                rule,
+                category=category,
+                travel_type=travel_type,
+                grade_band=grade_band,
+                duration=duration,
+            )
+        ]
+
+        if not matches:
+            reports.append({
+                "itemId": item_id,
+                "overallPassed": True,
+                "requiresManualReview": False,
+                "eligibleAmount": amount,
+                "checks": [],
+                "reasoningSummary": "No local travel policy rule applies to this item.",
+            })
+            continue
+
+        checks: List[Dict[str, Any]] = []
+        overall_passed = True
+        requires_manual_review = False
+        eligible_amount = amount
+
+        for rule in matches:
+            rule_type = rule.get("ruleType")
+            code = str(rule.get("code") or "")
+            rule_name = rule.get("name") or "Local Travel Policy Rule"
+
+            if rule_type == "PROHIBITED":
+                overall_passed = False
+                requires_manual_review = True
+                eligible_amount = 0.0
+                checks.append({
+                    "ruleId": code or "TRAVEL_PROHIBITED",
+                    "ruleName": rule_name,
+                    "category": category,
+                    "passed": False,
+                    "severity": "VIOLATION",
+                    "message": rule.get("description")
+                    or f"{category} is not reimbursable for this travel type.",
+                })
+                continue
+
+            if rule_type == "AMOUNT_CAP":
+                rule_amount = _number(rule.get("amount"))
+                rule_currency = str(rule.get("currency") or "INR")
+                if rule_amount is None:
+                    continue
+                if rule_currency != currency:
+                    requires_manual_review = True
+                    checks.append({
+                        "ruleId": f"{code}_CURRENCY_MISMATCH" if code else "TRAVEL_CURRENCY_MISMATCH",
+                        "ruleName": rule_name,
+                        "category": category,
+                        "passed": True,
+                        "severity": "REQUIREMENT",
+                        "message": (
+                            f"Item currency {currency} does not match rule currency "
+                            f"{rule_currency}; amount cap could not be compared automatically."
+                        ),
+                    })
+                    continue
+
+                eligible_amount = min(eligible_amount, rule_amount)
+                if amount > rule_amount:
+                    overall_passed = False
+                    requires_manual_review = True
+                    checks.append({
+                        "ruleId": code or "TRAVEL_AMOUNT_CAP_EXCEEDED",
+                        "ruleName": rule_name,
+                        "category": category,
+                        "passed": False,
+                        "severity": "VIOLATION",
+                        "message": (
+                            f"Amount {currency} {amount:.2f} exceeds configured cap "
+                            f"{currency} {rule_amount:.2f}. Eligible amount: "
+                            f"{currency} {min(amount, rule_amount):.2f}."
+                        ),
+                    })
+                else:
+                    checks.append({
+                        "ruleId": code or "TRAVEL_AMOUNT_CAP_PASS",
+                        "ruleName": rule_name,
+                        "category": category,
+                        "passed": True,
+                        "severity": "INFO",
+                        "message": (
+                            f"Amount {currency} {amount:.2f} is within configured cap "
+                            f"{currency} {rule_amount:.2f}."
+                        ),
+                    })
+
+        violations = [check["message"] for check in checks if not check["passed"]]
+        if violations:
+            reasoning_summary = f"Local travel policy violation(s): {' '.join(violations)}"
+        elif requires_manual_review:
+            reasoning_summary = (
+                "Local travel policy checks passed but require manual review."
+            )
+        else:
+            reasoning_summary = "Item satisfies the configured local travel policy rules."
+
+        reports.append({
+            "itemId": item_id,
+            "overallPassed": overall_passed,
+            "requiresManualReview": requires_manual_review,
+            "eligibleAmount": round(eligible_amount, 2),
+            "checks": checks,
+            "reasoningSummary": reasoning_summary,
+        })
+
+    return reports

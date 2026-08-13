@@ -12,6 +12,7 @@ from app.models.claim import (  # noqa: F401
     ClaimStatusHistory,
     Comment,
 )
+from app.models.claim_policy_rule import ClaimPolicyRule  # noqa: F401
 from app.models.enums import (  # noqa: F401
     AIInferenceStatus,
     ApprovalStepStatus,
@@ -19,10 +20,14 @@ from app.models.enums import (  # noqa: F401
     AttachmentKind,
     AuditAction,
     AuditEntity,
+    ClaimPolicyRuleType,
     ClaimStatus,
     EmployeeGrade,
+    ExpenseDuration,
     ExpenseItemStatus,
     FraudRiskLevel,
+    GradeBand,
+    TravelType,
 )
 from app.models.expense_item import ExpenseItem  # noqa: F401
 from app.models.fraud import FRAUD_ENGINE_VERSION, FraudResult  # noqa: F401
@@ -48,18 +53,23 @@ __all__ = [
     "AuditEntity",
     "AuditLog",
     "Claim",
+    "ClaimPolicyRule",
+    "ClaimPolicyRuleType",
     "ClaimStatus",
     "ClaimStatusHistory",
     "Comment",
     "Employee",
     "EmployeeGrade",
     "ExpenseCategory",
+    "ExpenseDuration",
     "ExpenseItem",
     "ExpenseItemStatus",
     "FRAUD_ENGINE_VERSION",
     "FraudResult",
     "FraudRiskLevel",
+    "GradeBand",
     "PolicyRule",
     "Role",
     "STANDARD_WORKFLOW_CODE",
+    "TravelType",
 ]

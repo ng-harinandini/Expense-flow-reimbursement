@@ -43,6 +43,7 @@ from app.repositories.claim_repository import ClaimRepository
 from app.repositories.employee_repository import EmployeeRepository
 from app.repositories.fraud_repository import FraudResultRepository
 from app.repositories.category_repository import CategoryRepository
+from app.repositories.claim_policy_rule_repository import ClaimPolicyRuleRepository
 from app.repositories.policy_rule_repository import PolicyRuleRepository
 from app.repositories.role_repository import RoleRepository
 from app.repositories.workflow_repository import ApprovalWorkflowRepository
@@ -175,6 +176,12 @@ def get_role_repository(db: Session = Depends(get_db)) -> RoleRepository:
 
 def get_policy_rule_repository(db: Session = Depends(get_db)) -> PolicyRuleRepository:
     return PolicyRuleRepository(db)
+
+
+def get_claim_policy_rule_repository(
+    db: Session = Depends(get_db),
+) -> ClaimPolicyRuleRepository:
+    return ClaimPolicyRuleRepository(db)
 
 
 def get_category_repository(db: Session = Depends(get_db)) -> CategoryRepository:
@@ -344,6 +351,9 @@ def get_claim_service(
     document_classification: Optional[DocumentClassificationService] = Depends(
         get_optional_document_classification
     ),
+    claim_policy_rule_repository: ClaimPolicyRuleRepository = Depends(
+        get_claim_policy_rule_repository
+    ),
 ) -> ClaimService:
     return ClaimService(
         claim_repository=claim_repository,
@@ -355,4 +365,5 @@ def get_claim_service(
         decision_memory=decision_memory,
         duplicate_detection=duplicate_detection,
         document_classification=document_classification,
+        claim_policy_rule_repository=claim_policy_rule_repository,
     )

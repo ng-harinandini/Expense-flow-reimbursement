@@ -45,11 +45,14 @@ from app.models.enums import (
     AuditAction,
     AuditEntity,
     ClaimStatus,
+    ExpenseDuration,
     ExpenseItemStatus,
     FraudRiskLevel,
+    TravelType,
 )
 from app.models.expense_item import ExpenseItem
 from app.models.organization import Employee
+from app.repositories.claim_policy_rule_repository import ClaimPolicyRuleRepository
 from app.repositories.claim_repository import ClaimQuery, ClaimRepository
 from app.repositories.fraud_repository import FraudResultRepository
 from app.repositories.workflow_repository import ApprovalWorkflowRepository
@@ -57,8 +60,12 @@ from app.services import receipt_extraction
 from app.services.audit_service import AuditService
 from app.services.employee_service import EmployeeService
 from app.services.fraud_engine import screen_for_anomalies
-from app.services.mappers import item_to_engine_input, items_to_engine_corpus
-from app.services.policy_engine import evaluate_expense_policy
+from app.services.mappers import (
+    claim_policy_rules_to_engine_input,
+    item_to_engine_input,
+    items_to_engine_corpus,
+)
+from app.services.policy_engine import evaluate_expense_policy, evaluate_travel_policy
 from app.services.policy_rule_service import PolicyRuleService
 from app.services.s3_service import S3DownloadError, download_receipt_from_s3
 
@@ -176,6 +183,7 @@ class ClaimService:
         decision_memory: Optional[DecisionMemoryRecorder] = None,
         duplicate_detection: Optional[DuplicateDetectionRecorder] = None,
         document_classification: Optional[DocumentClassificationRecorder] = None,
+        claim_policy_rule_repository: Optional[ClaimPolicyRuleRepository] = None,
     ) -> None:
         self._claims = claim_repository
         self._fraud = fraud_repository
@@ -189,6 +197,7 @@ class ClaimService:
         self._decision_memory = decision_memory
         self._duplicate_detection = duplicate_detection
         self._document_classification = document_classification
+        self._travel_policy_rules = claim_policy_rule_repository
 
     def _remember(
         self, kind: DecisionMemoryKind, subject_id: object, summary: str, *, actor: Actor
@@ -568,6 +577,8 @@ class ClaimService:
             category_id=self._resolve_category_id(category),
             category=category,
             sub_category=(payload.get("subCategory") or "General Expense").strip(),
+            travel_type=TravelType.coerce(payload["travelType"]) if payload.get("travelType") else None,
+            duration=ExpenseDuration.coerce(payload["duration"]) if payload.get("duration") else None,
             expense_date=expense_date,
             merchant_vendor=merchant_vendor,
             purpose_description=(payload.get("purposeDescription") or "").strip(),
@@ -635,6 +646,8 @@ class ClaimService:
             )
         )
 
+        travel_policy_reports = self._evaluate_travel_policy(claim, on_date=earliest)
+
         policy_reports: list[dict[str, Any]] = []
         fraud_reports: list[dict[str, Any]] = []
         for item in claim.items:
@@ -642,7 +655,10 @@ class ClaimService:
             engine_input = item_to_engine_input(item, claim=claim)
             policy_report = self._evaluate_item_policy(item, claim=claim, rules=rules)
             fraud_report = self._screen_item_fraud(item, claim=claim, corpus=corpus)
-            item.status = self._route_item(policy_report, fraud_report, classification_report)
+            travel_policy_report = travel_policy_reports.get(item.id)
+            item.status = self._route_item(
+                policy_report, fraud_report, classification_report, travel_policy_report
+            )
             policy_reports.append(policy_report)
             fraud_reports.append(fraud_report)
             corpus.append(engine_input)
@@ -703,6 +719,33 @@ class ClaimService:
             outcome="SUCCESS" if report.get("overallPassed") else "WARNING",
         )
         return report
+
+    def _evaluate_travel_policy(
+        self, claim: Claim, *, on_date: date
+    ) -> dict[uuid.UUID, dict[str, Any]]:
+        """Run the local-travel policy engine over every item of the claim at once.
+
+        A separate, additive layer from :meth:`_evaluate_item_policy` — see
+        ``doc/travel-policy-rules.md``. Returns an empty dict (no travel-policy opinion on any
+        item, byte-identical to before this capability existed) when the repository was never
+        wired — the same "``None`` means off" treatment every other optional ``ClaimService``
+        dependency gets, decided once in ``app.core.deps`` rather than here.
+        """
+        if self._travel_policy_rules is None:
+            return {}
+
+        rules = claim_policy_rules_to_engine_input(
+            self._travel_policy_rules.list_effective(on_date)
+        )
+        items_input = [item_to_engine_input(item, claim=claim) for item in claim.items]
+        reports = evaluate_travel_policy(items_input, rules)
+
+        # evaluate_travel_policy preserves input order and emits exactly one report per item.
+        by_item_id: dict[uuid.UUID, dict[str, Any]] = {}
+        for item, report in zip(claim.items, reports):
+            item.travel_policy_validation = report
+            by_item_id[item.id] = report
+        return by_item_id
 
     def _screen_item_fraud(
         self, item: ExpenseItem, *, claim: Claim, corpus: list[dict[str, Any]]
@@ -887,19 +930,26 @@ class ClaimService:
         policy_report: dict[str, Any],
         fraud_report: dict[str, Any],
         classification_report: Optional[dict[str, Any]] = None,
+        travel_policy_report: Optional[dict[str, Any]] = None,
     ) -> ExpenseItemStatus:
         """Destination for one evaluated item. Thresholds unchanged from the claim-level routing.
 
-        ``classification_report`` only ever pushes an otherwise-clean item to ``POLICY_HOLD`` — the
-        same "ask a human" status a policy violation already uses. This is the one place the new
-        document-classification capability affects routing; the policy/fraud engines themselves
-        (``evaluate_expense_policy``/``screen_for_anomalies``) are unchanged.
+        ``classification_report`` and ``travel_policy_report`` only ever push an otherwise-clean
+        item to ``POLICY_HOLD`` — the same "ask a human" status a category-policy violation
+        already uses. This is the one place either capability affects routing; the underlying
+        engines (``evaluate_expense_policy``/``evaluate_travel_policy``/``screen_for_anomalies``)
+        are unchanged.
         """
         if fraud_report["isFlagged"] and fraud_report["riskScore"] >= FRAUD_ROUTING_THRESHOLD:
             return ExpenseItemStatus.FRAUD_FLAG
         if not policy_report.get("overallPassed"):
             return ExpenseItemStatus.POLICY_HOLD
         if policy_report.get("requiresManualReview"):
+            return ExpenseItemStatus.POLICY_HOLD
+        if travel_policy_report and (
+            not travel_policy_report.get("overallPassed")
+            or travel_policy_report.get("requiresManualReview")
+        ):
             return ExpenseItemStatus.POLICY_HOLD
         if classification_report and classification_report.get("categoryReviewRequired"):
             return ExpenseItemStatus.POLICY_HOLD
