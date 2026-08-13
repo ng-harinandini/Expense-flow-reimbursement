@@ -6,8 +6,6 @@ export interface CategoryFields {
   expense_category?: string;
   total_amount?: number;
   currency?: string;
-  invoice_from_date?: string;
-  invoice_to_date?: string;
   vendor_name?: string;
   invoice_number?: string;
   travel_route?: string;

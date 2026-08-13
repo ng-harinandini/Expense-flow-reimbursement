@@ -87,6 +87,8 @@ export const CURRENCY_CODES = [
   "ZAR",
 ];
 
+export const TRAVEL_TYPES = ["Local", "Domestic", "International"] as const;
+
 export const MAX_EXPENSE_ITEMS = 10;
 
 export const CATEGORY_ICONS: Record<string, LucideIcon> = {

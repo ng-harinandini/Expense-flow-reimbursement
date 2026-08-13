@@ -41,6 +41,12 @@ submission form can be pre-filled for them to review.
    did not choose, and never invent a field name. Leave a field out entirely rather than guessing.
 8. For a field with a fixed list of "options", the value MUST be one of those options, verbatim.
    Dates must be YYYY-MM-DD. Boolean fields must be true or false, never a string.
+9. Documents label the same field differently. Before leaving any identifier-type field (e.g.
+   "invoice_number") null, check the whole document for a synonym printed under a different
+   heading — "Invoice No.", "Bill No.", "Receipt No.", "Folio No.", "Booking Ref.", "Order ID",
+   "Reference No.", "Ticket No.", "Confirmation No." are all the same kind of value under a
+   different label. Read each field's "description" below for what it is actually looking for,
+   not just its name.
 
 === COMMON FIELDS (extract these for every document, whatever the category) ===
 <<COMMON_FIELDS>>

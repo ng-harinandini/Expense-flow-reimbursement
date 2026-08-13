@@ -21,6 +21,12 @@ interface CreateClaimItem {
   ocrSource?: string;
   ocrConfidence?: Record<string, number> | null;
   ocrExtractedJson?: Record<string, unknown> | null;
+  /**
+   * Fields the form collects that have no dedicated column on `ExpenseItemCreateSchema` yet
+   * (invoice number, travel route/type, attendee/day counts). Packed here rather than dropped
+   * silently — the backend already accepts this as freeform JSON.
+   */
+  employeeCorrectedData?: Record<string, unknown> | null;
 }
 
 interface CreateClaimRequest {
@@ -44,8 +50,9 @@ function buildItem(draft: ExpenseItemDraft): CreateClaimItem {
   return {
     category: draft.category || undefined,
     amount: draft.amount,
+    currency: draft.currency || undefined,
     merchantVendor: draft.merchantVendor || undefined,
-    expenseDate: draft.expenseFromDate || undefined,
+    expenseDate: draft.invoiceDate || undefined,
     purposeDescription: draft.description || undefined,
     receiptAttached: true,
     fileUrl: ext?.fileUrl ?? null,
@@ -56,6 +63,13 @@ function buildItem(draft: ExpenseItemDraft): CreateClaimItem {
     ocrSource: ext?.ocrSource,
     ocrConfidence: ext?.ocrConfidence ?? null,
     ocrExtractedJson: (ext?.extraction as Record<string, unknown> | null) ?? null,
+    employeeCorrectedData: {
+      invoiceNumber: draft.invoiceNumber || undefined,
+      travelRoute: draft.travelRoute || undefined,
+      travelType: draft.travelType || undefined,
+      numberOfAttendees: draft.numberOfAttendees,
+      numberOfDays: draft.numberOfDays,
+    },
   };
 }
 
