@@ -26,6 +26,7 @@ import {
   formatCurrency,
   formatDate,
   formatDateTime,
+  formatHoldReason,
 } from "@/components/my_claims/columns";
 import { ClaimStatusStepper } from "@/components/my_claims/ClaimStatusStepper";
 
@@ -195,6 +196,23 @@ export function ClaimReviewDialog({
                     </p>
                     <p className="text-sm text-foreground">{selectedItem.description}</p>
                   </div>
+                  {selectedItem.holdReason?.trim() && (
+                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        Hold Reason
+                      </p>
+                      {formatHoldReason(selectedItem.holdReason).map((segment, index) => (
+                        <div key={index} className="mt-1 text-sm text-foreground">
+                          <p>{segment.message}</p>
+                          {segment.rulesViolated.length > 0 && (
+                            <p className="mt-0.5 text-muted-foreground">
+                              Rules violated: {segment.rulesViolated.join(", ")}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </>
             )}

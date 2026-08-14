@@ -229,6 +229,9 @@ export interface ClaimExpenseItem {
   currency: string;
   receiptUrl: string;
   status: ExpenseItemStatus;
+  /** System-authored explanation of why this item is on Policy_Hold/Fraud_Flag. Absent/undefined
+   * when the item is clean. */
+  holdReason?: string | null;
 }
 
 /** A claim raised for a trip/purchase, grouping one or more expense items. */
@@ -271,6 +274,11 @@ export interface AdminPolicyRule {
   autoApproveLimit: number | null; // null means 'always manual review'
   requiresReceiptAbove: number;
   effectiveFrom: string; // ISO date
+  description?: string | null;
+  // `GET /policy-rules` only ever returns active rules, so unchecking this on save makes the rule
+  // disappear from the grid entirely (its currently-active version is retired, and the newly
+  // published one starts inactive) — there's no "show inactive rules" view yet.
+  isActive: boolean;
 }
 
 export interface AuditLogEntry {

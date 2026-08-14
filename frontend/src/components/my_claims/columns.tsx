@@ -69,6 +69,51 @@ export function formatDateTime(value: string) {
   });
 }
 
+export interface HoldReasonSegment {
+  /** Set only when the claim has more than one held item — disambiguates which item this is. */
+  itemLabel?: string;
+  message: string;
+  rulesViolated: string[];
+}
+
+// Matches ClaimService._build_hold_reason's "Item #<n> (<category>): " prefix per segment.
+const ITEM_PREFIX_RE = /^Item #(\d+) \(([^)]*)\):\s*/;
+
+// Matches the specific merge-explanation clause seeded onto LOCAL_HOTEL_PROHIBITED's description
+// (see 0016_claim_policy_rules.py's `_HOTEL_DESCRIPTION`): "Merges the sheet's 'A' and 'B' rows,
+// which state the same restriction." Other policy violations don't use this phrasing, so it simply
+// won't match — those messages render as-is, with no "Rules violated" line.
+const MERGE_CLAUSE_RE =
+  /\s*Merges the sheet's ((?:'[^']+'(?:,\s*|\s+and\s+))*'[^']+')\s+rows,\s*which state the same restriction\.?\s*$/;
+const QUOTED_NAME_RE = /'([^']+)'/g;
+
+/**
+ * Splits a claim's rolled-up ``holdReason`` (pipe-joined per item, see ``ClaimService``) into
+ * per-item segments, stripping the redundant item/category label when there's only one, and
+ * pulling any "Merges the sheet's ..." rule names into a separate ``rulesViolated`` list rather
+ * than leaving them embedded in the sentence.
+ */
+export function formatHoldReason(raw: string): HoldReasonSegment[] {
+  const segments = raw.split(" | ").filter((segment) => segment.trim());
+  const showItemLabel = segments.length > 1;
+
+  return segments.map((segment) => {
+    const prefixMatch = segment.match(ITEM_PREFIX_RE);
+    const body = prefixMatch ? segment.slice(prefixMatch[0].length) : segment;
+    const itemLabel =
+      showItemLabel && prefixMatch ? `Item #${prefixMatch[1]} (${prefixMatch[2]})` : undefined;
+
+    const mergeMatch = body.match(MERGE_CLAUSE_RE);
+    if (!mergeMatch) {
+      return { itemLabel, message: body.trim(), rulesViolated: [] };
+    }
+
+    const rulesViolated = Array.from(mergeMatch[1].matchAll(QUOTED_NAME_RE)).map((m) => m[1]);
+    const message = body.slice(0, mergeMatch.index).trim();
+    return { itemLabel, message, rulesViolated };
+  });
+}
+
 
 /**
  * Compact range for the line under a claim title: "Jul 20 – Jul 24, 2026". The year is printed

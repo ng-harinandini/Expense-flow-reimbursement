@@ -48,6 +48,8 @@ export function policyRuleToFormValues(rule: AdminPolicyRule): PolicyRuleFormVal
     autoApproveLimit: rule.autoApproveLimit ?? undefined,
     requiresReceiptAbove: rule.requiresReceiptAbove,
     effectiveFrom: rule.effectiveFrom,
+    description: rule.description ?? "",
+    isActive: rule.isActive,
   };
 }
 
@@ -66,6 +68,8 @@ export function formValuesToPolicyRule(
     autoApproveLimit: values.autoApproveLimit ?? null,
     requiresReceiptAbove: values.requiresReceiptAbove,
     effectiveFrom: values.effectiveFrom,
+    description: values.description?.trim() || null,
+    isActive: values.isActive ?? true,
   };
 }
 
@@ -80,6 +84,7 @@ const MOCK_EXTRACTION_POOL: PolicyRuleFormValues[][] = [
       autoApproveLimit: 100,
       requiresReceiptAbove: 0,
       effectiveFrom: "2026-01-01",
+      isActive: true,
     },
     {
       category: "Parking & Tolls",
@@ -89,6 +94,7 @@ const MOCK_EXTRACTION_POOL: PolicyRuleFormValues[][] = [
       autoApproveLimit: 50,
       requiresReceiptAbove: 0,
       effectiveFrom: "2026-01-01",
+      isActive: true,
     },
     {
       category: "Courier / Postage",
@@ -98,6 +104,7 @@ const MOCK_EXTRACTION_POOL: PolicyRuleFormValues[][] = [
       autoApproveLimit: 50,
       requiresReceiptAbove: 0,
       effectiveFrom: "2026-01-01",
+      isActive: true,
     },
   ],
   [
@@ -109,6 +116,7 @@ const MOCK_EXTRACTION_POOL: PolicyRuleFormValues[][] = [
       autoApproveLimit: undefined,
       requiresReceiptAbove: 0,
       effectiveFrom: "2026-01-01",
+      isActive: true,
     },
     {
       category: "Communication",
@@ -118,6 +126,7 @@ const MOCK_EXTRACTION_POOL: PolicyRuleFormValues[][] = [
       autoApproveLimit: 50,
       requiresReceiptAbove: 0,
       effectiveFrom: "2026-01-01",
+      isActive: true,
     },
   ],
 ];

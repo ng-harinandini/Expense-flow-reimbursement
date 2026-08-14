@@ -6,7 +6,9 @@ import { Calendar, DollarSign, Percent, Ruler, ShieldCheck, Tag } from "lucide-r
 
 import { Label } from "@/components/ui/Label";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { EXPENSE_CATEGORIES } from "@/components/submit_expense/helpers";
+import { useCategoriesQuery } from "@/api/categories";
 
 import { POLICY_RULE_GRADES, POLICY_RULE_UNITS } from "./helpers";
 import type { PolicyRuleFormValues } from "./policyRuleSchema";
@@ -25,6 +27,19 @@ interface PolicyRuleFormFieldsProps {
 export function PolicyRuleFormFields({ register, errors, idPrefix }: PolicyRuleFormFieldsProps) {
   const fieldId = (name: string) => `${idPrefix}-${name}`;
 
+  // Same source and derivation as the expense item's own category select (see
+  // AddExpenseItemDialog) — a policy rule is scoped to a real database category, so this list
+  // must match, not the hardcoded fallback. EXPENSE_CATEGORIES only covers the query not landing
+  // yet or failing.
+  const { data: liveCategories } = useCategoriesQuery();
+  const categoryOptions = React.useMemo(() => {
+    const live = (liveCategories ?? [])
+      .filter((category) => !category.isCommon && category.isActive)
+      .sort((a, b) => a.displayOrder - b.displayOrder)
+      .map((category) => category.name);
+    return live.length ? live : EXPENSE_CATEGORIES;
+  }, [liveCategories]);
+
   return (
     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
       <div className="space-y-1.5">
@@ -38,7 +53,7 @@ export function PolicyRuleFormFields({ register, errors, idPrefix }: PolicyRuleF
             {...register("category")}
           >
             <option value="">Select a category</option>
-            {EXPENSE_CATEGORIES.map((c) => (
+            {categoryOptions.map((c) => (
               <option key={c} value={c}>
                 {c}
               </option>
@@ -165,6 +180,32 @@ export function PolicyRuleFormFields({ register, errors, idPrefix }: PolicyRuleF
         {errors.effectiveFrom && (
           <p className="text-xs text-destructive">{errors.effectiveFrom.message}</p>
         )}
+      </div>
+
+      <div className="space-y-1.5 sm:col-span-2">
+        <Label htmlFor={fieldId("description")}>Description</Label>
+        <Textarea
+          id={fieldId("description")}
+          rows={3}
+          placeholder="Optional details shown alongside this rule"
+          aria-invalid={!!errors.description}
+          {...register("description")}
+        />
+        {errors.description && (
+          <p className="text-xs text-destructive">{errors.description.message}</p>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 sm:col-span-2">
+        <input
+          id={fieldId("isActive")}
+          type="checkbox"
+          className="size-4 rounded border-input"
+          {...register("isActive")}
+        />
+        <Label htmlFor={fieldId("isActive")} className="font-normal">
+          Active (enforced immediately)
+        </Label>
       </div>
     </div>
   );

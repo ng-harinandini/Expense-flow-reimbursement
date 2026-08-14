@@ -151,6 +151,7 @@ interface ClaimApiShape {
     currency: string | null;
     fileUrl: string | null;
     status: string | null;
+    holdReason?: string | null;
   }>;
   workflowHistory: WorkflowStepLog[];
   withdrawnAt: string | null;
@@ -170,6 +171,7 @@ function mapClaim(raw: ClaimApiShape): Claim {
     currency: i.currency ?? "USD",
     receiptUrl: i.fileUrl ?? "",
     status: (i.status ?? "Submitted") as ClaimExpenseItem["status"],
+    holdReason: i.holdReason ?? null,
   }));
 
   return {

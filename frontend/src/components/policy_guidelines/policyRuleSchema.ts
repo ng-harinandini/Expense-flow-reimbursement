@@ -21,6 +21,8 @@ export const policyRuleSchema = yup.object({
     .min(0, "Requires receipt above cannot be negative")
     .required("Requires receipt above is required"),
   effectiveFrom: yup.string().required("Effective from date is required"),
+  description: yup.string().trim().optional(),
+  isActive: yup.boolean().default(true),
 });
 
 export type PolicyRuleFormValues = yup.InferType<typeof policyRuleSchema>;
@@ -33,4 +35,6 @@ export const POLICY_RULE_FORM_DEFAULTS: PolicyRuleFormValues = {
   autoApproveLimit: undefined,
   requiresReceiptAbove: undefined as unknown as number,
   effectiveFrom: "",
+  description: "",
+  isActive: true,
 };

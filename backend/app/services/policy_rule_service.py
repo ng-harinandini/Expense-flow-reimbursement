@@ -155,6 +155,7 @@ class PolicyRuleService:
                     category=category,
                     effective_date=as_of,
                     created_by_sub=actor.sub,
+                    is_active=bool(raw.get("isActive", True)),
                     description=raw.get("description"),
                     country=(raw.get("country") or None),
                     currency=(raw.get("currency") or "USD").upper()[:3],

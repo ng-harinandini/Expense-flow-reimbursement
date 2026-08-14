@@ -44,12 +44,6 @@ export function buildColumnDefs(
       valueGetter: (params) => params.data?.customFields.length ?? 0,
     },
     {
-      headerName: "Order",
-      field: "displayOrder",
-      flex: 0.6,
-      minWidth: 90,
-    },
-    {
       headerName: "Active",
       colId: "isActive",
       flex: 0.6,

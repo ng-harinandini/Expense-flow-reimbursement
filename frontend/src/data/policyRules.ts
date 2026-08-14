@@ -11,6 +11,7 @@ export const INITIAL_POLICY_RULES: AdminPolicyRule[] = [
     autoApproveLimit: 25,
     requiresReceiptAbove: 25,
     effectiveFrom: "2026-01-01",
+    isActive: true,
   },
   {
     id: 2,
@@ -21,6 +22,7 @@ export const INITIAL_POLICY_RULES: AdminPolicyRule[] = [
     autoApproveLimit: 50,
     requiresReceiptAbove: 0,
     effectiveFrom: "2026-01-01",
+    isActive: true,
   },
   {
     id: 3,
@@ -31,6 +33,7 @@ export const INITIAL_POLICY_RULES: AdminPolicyRule[] = [
     autoApproveLimit: null,
     requiresReceiptAbove: 0,
     effectiveFrom: "2026-01-01",
+    isActive: true,
   },
   {
     id: 4,
@@ -41,6 +44,7 @@ export const INITIAL_POLICY_RULES: AdminPolicyRule[] = [
     autoApproveLimit: null,
     requiresReceiptAbove: 0,
     effectiveFrom: "2026-01-01",
+    isActive: true,
   },
   {
     id: 5,
@@ -51,5 +55,6 @@ export const INITIAL_POLICY_RULES: AdminPolicyRule[] = [
     autoApproveLimit: null,
     requiresReceiptAbove: 50,
     effectiveFrom: "2026-01-01",
+    isActive: true,
   },
 ];

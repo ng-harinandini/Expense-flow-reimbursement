@@ -60,6 +60,8 @@ function mapPolicyRule(raw: PolicyRuleApiShape, index: number): AdminPolicyRule 
     effectiveFrom: effectiveFromEntry
       ? effectiveFromEntry.slice(EFFECTIVE_FROM_PREFIX.length)
       : raw.effectiveDate ?? "",
+    description: raw.description ?? null,
+    isActive: raw.isActive ?? true,
   };
 }
 
@@ -79,6 +81,8 @@ export function policyRuleToApiShape(rule: AdminPolicyRule): PolicyRuleApiShape 
     receiptRequiredAboveUSD: rule.requiresReceiptAbove,
     effectiveDate: rule.effectiveFrom || undefined,
     specialRules,
+    description: rule.description || undefined,
+    isActive: rule.isActive,
   };
 }
 

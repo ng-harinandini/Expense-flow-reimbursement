@@ -98,6 +98,7 @@ class PolicyRuleRepository(BaseRepository[PolicyRule]):
         category: str,
         effective_date: Optional[date] = None,
         created_by_sub: Optional[str] = None,
+        is_active: bool = True,
         **fields,
     ) -> PolicyRule:
         """Publish the next version of ``code``, retiring the current one.
@@ -124,7 +125,7 @@ class PolicyRuleRepository(BaseRepository[PolicyRule]):
             name=name,
             category=category,
             effective_date=effective_from,
-            is_active=True,
+            is_active=is_active,
             created_by_sub=created_by_sub,
             **fields,
         )
